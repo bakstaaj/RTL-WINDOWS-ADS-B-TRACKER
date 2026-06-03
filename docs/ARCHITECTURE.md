@@ -97,3 +97,7 @@ The browser can sequence existing FAA-validated AM live-audio requests across a 
 ## Operator-configured airband survey planning
 
 The browser supplies bounded survey-plan controls that filter the existing FAA-ranked channel API response before making FAA-validated live AM requests. Category filtering and sample-duration choices remain UI-side measurement behavior; no autonomous traffic detector or backend scan scheduler is introduced.
+
+## Manual review of ranked survey results
+
+Ranked browser-side Survey Scan results retain their underlying FAA catalog record. A manual result-row Listen action passes that record to the already validated AM live-listening path, providing operator confirmation without introducing backend auto-selection, voice detection, channel hold or automatic playback.

@@ -133,3 +133,7 @@ The Nearby Airband Channels panel supports a bounded **Survey Scan** that measur
 ## Configurable Airband Survey Plan
 
 The bounded Survey Scan panel supports operator-selected radius, number of unique frequencies, sample duration and channel category grouping. These options make the measurement workflow useful for continuous Weather/ATIS signals or sporadic operational channels without adding unvalidated automatic activity/hold behavior. See `docs/AIRBAND_SURVEY_PLAN.md`.
+
+## Survey result manual Listen review
+
+Completed Survey Scan result rows include a manual **Listen** action, allowing an operator to audition a ranked FAA-validated AM candidate without locating it again in the full channel list. Survey Scan remains measurement-only and silent until the operator selects a result. See `docs/AIRBAND_SURVEY_REVIEW.md`.
