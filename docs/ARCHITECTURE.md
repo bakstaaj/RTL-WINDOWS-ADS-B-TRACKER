@@ -47,3 +47,15 @@ Application start
 ## Native device-role manager baseline
 
 The first native executable, `rtl_dual_device_probe`, uses `librtlsdr` to enumerate both dongles sequentially and assigns roles by EEPROM serial number before opening any handles. Its `--open-test` operation opens both receivers by their resolved session indexes and reads a sample block from each. This behavior is the baseline for the later backend-managed ADS-B and audio workers.
+
+## Windows ADS-B decoder baseline
+
+The Windows ADS-B runtime is built around the Windows-native `gvanem/Dump1090` decoder. The backend will not ask Dump1090 to discover the receiver role itself. Instead, the native project-owned probe resolves EEPROM serial `00001090` to its session index and the launcher starts Dump1090 with `--device <resolved_index>`.
+
+Validated initial live profile:
+
+```text
+1090.0 MHz / 2.0 MS/s / 48.8 dB fixed tuner gain
+```
+
+Dump1090 exposes live state through `/data/aircraft.json`, which is the initial aircraft-data contract for the future local backend and browser UI.

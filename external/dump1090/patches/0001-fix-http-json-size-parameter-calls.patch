@@ -1,0 +1,22 @@
+diff --git a/src/net_io.c b/src/net_io.c
+index fc199a3..7f5e949 100644
+--- a/src/net_io.c
++++ b/src/net_io.c
+@@ -659,7 +659,7 @@ static int net_handler_http (mg_connection *c, mg_http_message *hm, mg_http_uri
+ 
+   if (!stricmp(uri, "/data/receiver.json"))
+   {
+-    aircraft_receiver_json (c);
++    aircraft_receiver_json (c, NULL);
+     return (200);
+   }
+ 
+@@ -674,7 +674,7 @@ static int net_handler_http (mg_connection *c, mg_http_message *hm, mg_http_uri
+ 
+   if (is_dump1090 || is_extended)
+   {
+-    char *data = aircraft_make_json (is_extended);
++    char *data = aircraft_make_json (is_extended, NULL);
+ 
+     /* "Cross Origin Resource Sharing":
+      * https://www.freecodecamp.org/news/access-control-allow-origin-header-explained/

@@ -52,3 +52,26 @@ cd ~/sdrdev/RTL-Windows-ADS-B-Tracker
 ```
 
 This implements the verified startup rule needed to avoid concurrent serial-discovery conflicts on the dual RTL-SDR Windows host.
+
+## Windows ADS-B decoder integration
+
+The validated Windows ADS-B decoder candidate is `gvanem/Dump1090`. It is built reproducibly from a pinned upstream commit into ignored build/output directories and is started only after the native device-role probe resolves the ADS-B receiver serial to its current session index.
+
+Verified receiver profile on the GOLE2PRO with NooElec serial `00001090`:
+
+```text
+Frequency:   1090.0 MHz
+Sample rate: 2.0 MS/s
+Tuner gain:  48.8 dB
+JSON API:    /data/aircraft.json
+```
+
+Build and verify:
+
+```bash
+cd ~/sdrdev/RTL-Windows-ADS-B-Tracker
+./tools/build_dump1090_windows.sh
+./tools/test_dump1090_adsb_json.sh
+```
+
+See `docs/ADSB_DECODER_INTEGRATION.md` and `external/dump1090/README.md` for upstream attribution and the documented compatibility patch.
