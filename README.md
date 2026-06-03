@@ -117,3 +117,7 @@ The NOAA/Airband receiver now also supports local browser live listening through
 ## Receiver location settings
 
 The browser Receiver Status panel now supports a persisted receiver label, latitude and longitude. The backend stores operational settings outside tracked source, and the saved location provides the reference point for upcoming distance-ranked airband channel support. See `docs/RECEIVER_LOCATION.md`.
+
+## FAA distance-ranked airband catalog baseline
+
+The application imports official FAA NASR `FRQ.csv` airband records into excluded runtime data and displays nearby channels ordered from the saved receiver location. The first catalog baseline is read-only; audio tune/listen/scan controls follow after presentation validation. See `docs/AIRBAND_CATALOG.md`.

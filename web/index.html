@@ -42,6 +42,17 @@
         </div>
       </details>
     </section>
+    <section class="panel airband-panel">
+      <div class="panel-title"><h2>Nearby Airband Channels</h2><span id="airband-source" class="badge">FAA</span></div>
+      <p class="airband-help">Nearest channels within 100 miles of the saved receiver location. Listening controls follow after catalog validation.</p>
+      <div id="airband-summary" class="airband-summary">Loading FAA frequency catalog…</div>
+      <div class="airband-table-wrap">
+        <table class="airband-table">
+          <thead><tr><th>Dist</th><th>Freq</th><th>Use</th><th>Facility</th></tr></thead>
+          <tbody id="airband-body"></tbody>
+        </table>
+      </div>
+    </section>
     <section class="panel audio-panel">
       <div class="panel-title"><h2>NOAA Weather Radio</h2><span id="audio-state" class="badge">Idle</span></div>
       <p class="audio-channel">162.500 MHz NFM · audio receiver <span id="audio-role">—</span></p>

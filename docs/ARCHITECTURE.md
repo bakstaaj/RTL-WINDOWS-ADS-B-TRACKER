@@ -81,3 +81,7 @@ Live NOAA listening uses the cached audio-role index for serial `00000162`. The 
 ## Persisted receiver location
 
 The backend owns validated receiver-location settings stored in excluded runtime settings JSON. `/api/status` and `/api/settings` expose the saved location to the browser map; decoder configuration applies that location at decoder startup. This setting is the spatial reference for future airband-channel distance sorting and receiver coverage features.
+
+## FAA airband catalog and ranked-channel API
+
+Official FAA NASR `FRQ.csv` is imported into an excluded runtime JSON catalog. The backend filters civil VHF channels and ranks them by distance from the persisted receiver location before serving `/api/airband/channels`. `FRQ.csv` supplies normalized frequency/use/facility/location fields directly, so the baseline avoids parsing free-text ATC remarks.

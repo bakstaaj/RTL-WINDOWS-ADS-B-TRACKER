@@ -33,6 +33,8 @@ from pathlib import Path
 from typing import Any
 from urllib.error import URLError
 from urllib.parse import parse_qs, urlparse
+
+from faa_airband_catalog import AirbandCatalog
 from urllib.request import urlopen
 
 LOG = logging.getLogger("rtl_windows_backend")
@@ -640,6 +642,10 @@ class ApiHandler(BaseHTTPRequestHandler):
     def audio(self) -> AudioManager:
         return self.server.audio_manager  # type: ignore[attr-defined]
 
+    @property
+    def airband(self) -> AirbandCatalog:
+        return self.server.airband_catalog  # type: ignore[attr-defined]
+
     def log_message(self, format: str, *args: Any) -> None:
         LOG.info("%s - %s", self.address_string(), format % args)
 
@@ -699,6 +705,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         try:
             parsed_url = urlparse(self.path)
             route = parsed_url.path
+            query = parse_qs(parsed_url.query)
             if route == "/":
                 self.send_file(self.manager.root / "web" / "index.html")
             elif route.startswith("/static/"):
@@ -731,6 +738,14 @@ class ApiHandler(BaseHTTPRequestHandler):
                     self.send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "no_recording"})
             elif route == "/api/settings":
                 self.send_json(HTTPStatus.OK, {"ok": True, "receiver_location": self.manager.settings.receiver_location()})
+            elif route == "/api/airband/channels":
+                try:
+                    radius_miles = float(query.get("radius_miles", ["100"])[0])
+                    limit = int(query.get("limit", ["50"])[0])
+                except ValueError:
+                    self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "invalid_airband_query"})
+                    return
+                self.send_json(HTTPStatus.OK, self.airband.query(self.manager.settings.receiver_location(), radius_miles, limit))
             elif route == "/api/audio/live/status":
                 self.send_json(HTTPStatus.OK, self.audio.live_status())
             elif route == "/api/audio/live/chunk.wav":
@@ -790,6 +805,7 @@ def main() -> int:
     parser.add_argument("--dump-http-port", type=int, default=18080)
     parser.add_argument("--audio-record-seconds", type=int, default=30)
     parser.add_argument("--settings-file", help="Override the application settings JSON path for testing.")
+    parser.add_argument("--airband-catalog-file", help="Override the generated FAA airband catalog JSON path for testing.")
     parser.add_argument("--autostart", action="store_true", help="Start ADS-B decoder on backend startup.")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
@@ -802,11 +818,14 @@ def main() -> int:
     root = Path(__file__).resolve().parents[2]
     settings_path = Path(args.settings_file) if args.settings_file else root / "runtime" / "settings" / "application_settings.json"
     settings = SettingsStore(settings_path)
+    catalog_path = Path(args.airband_catalog_file) if args.airband_catalog_file else root / "runtime" / "settings" / "faa_airband_catalog.json"
+    airband_catalog = AirbandCatalog(catalog_path)
     manager = DecoderManager(root, args.dump_http_port, settings)
     audio_manager = AudioManager(manager, args.audio_record_seconds)
     server = ThreadingHTTPServer((args.host, args.port), ApiHandler)
     server.manager = manager  # type: ignore[attr-defined]
     server.audio_manager = audio_manager  # type: ignore[attr-defined]
+    server.airband_catalog = airband_catalog  # type: ignore[attr-defined]
 
     def shutdown_handler(signum: int, frame: Any) -> None:
         del signum, frame
