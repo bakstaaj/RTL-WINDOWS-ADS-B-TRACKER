@@ -1,0 +1,21 @@
+FROM debian:bookworm-slim
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       bash \
+       ca-certificates \
+       cmake \
+       file \
+       gcc-mingw-w64-x86-64 \
+       g++-mingw-w64-x86-64 \
+       make \
+       ninja-build \
+       pkg-config \
+       zip \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /work
+
+CMD ["bash"]

@@ -1,0 +1,29 @@
+# Build and generated artifacts
+/build/
+/dist/*
+!/dist/.gitkeep
+/test_output/*
+!/test_output/.gitkeep
+
+# Runtime configuration and secrets
+/runtime/settings/*
+!/runtime/settings/.gitkeep
+.env
+*.key
+*api_key*.json
+*route_cache*.json
+
+# Captures, audio, logs and temporary diagnostics
+*.iq
+*.wav
+*.log
+*.tmp
+*.bak
+*.before_*
+*.broken_before_*
+
+# IDE / operating-system noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
