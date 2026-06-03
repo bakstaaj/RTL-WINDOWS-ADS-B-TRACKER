@@ -85,3 +85,7 @@ The backend owns validated receiver-location settings stored in excluded runtime
 ## FAA airband catalog and ranked-channel API
 
 Official FAA NASR `FRQ.csv` is imported into an excluded runtime JSON catalog. The backend filters civil VHF channels and ranks them by distance from the persisted receiver location before serving `/api/airband/channels`. `FRQ.csv` supplies normalized frequency/use/facility/location fields directly, so the baseline avoids parsing free-text ATC remarks.
+
+## FAA-selected live airband audio
+
+Manual airband listening accepts only a selected record present in the imported FAA runtime catalog, then tunes the cached audio-role receiver in AM mode. It reuses the existing live rolling-WAV transport and remains mutually exclusive with NOAA live/listen/record operations on serial `00000162`.

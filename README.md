@@ -121,3 +121,7 @@ The browser Receiver Status panel now supports a persisted receiver label, latit
 ## FAA distance-ranked airband catalog baseline
 
 The application imports official FAA NASR `FRQ.csv` airband records into excluded runtime data and displays nearby channels ordered from the saved receiver location. The first catalog baseline is read-only; audio tune/listen/scan controls follow after presentation validation. See `docs/AIRBAND_CATALOG.md`.
+
+## Manual live airband listening baseline
+
+Each nearby FAA airband channel can be selected for live AM listening on the dedicated audio receiver while ADS-B continues operating. The backend validates the selected frequency against the imported FAA catalog before tuning and reuses rolling WAV/Web Audio delivery. See `docs/AIRBAND_LISTENING.md`.

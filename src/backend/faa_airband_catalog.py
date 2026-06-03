@@ -142,6 +142,26 @@ class AirbandCatalog:
             self._modified_ns = modified_ns
         return self._data
 
+    def find_channel(self, frequency_hz: int, serviced_facility: str = "", frequency_use: str = "") -> dict[str, Any] | None:
+        data = self._load()
+        if data is None:
+            return None
+        requested_facility = serviced_facility.strip().upper()
+        requested_use = frequency_use.strip().upper()
+        matches: list[dict[str, Any]] = []
+        for channel in data.get("channels", []):
+            if int(channel.get("frequency_hz", 0)) != int(frequency_hz):
+                continue
+            if requested_facility and str(channel.get("serviced_facility", "")).upper() != requested_facility:
+                continue
+            if requested_use and str(channel.get("frequency_use", "")).upper() != requested_use:
+                continue
+            matches.append(dict(channel))
+        if not matches:
+            return None
+        matches.sort(key=lambda item: (item.get("serviced_facility", ""), item.get("frequency_use", "")))
+        return matches[0]
+
     def query(self, receiver_location: dict[str, Any], radius_miles: float = DEFAULT_RADIUS_MILES, limit: int = DEFAULT_LIMIT) -> dict[str, Any]:
         data = self._load()
         radius = max(1.0, min(float(radius_miles), 500.0))

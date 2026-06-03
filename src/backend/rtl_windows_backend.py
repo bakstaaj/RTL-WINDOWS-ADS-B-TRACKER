@@ -53,6 +53,12 @@ NOAA_PROFILE = {
     "gain_db": 40.2,
     "deemphasis": True,
 }
+AIRBAND_LIVE_AUDIO_PROFILE = {
+    "modulation": "am",
+    "sample_rate_hz": 24000,
+    "gain_db": 40.2,
+    "deemphasis": False,
+}
 
 
 def windows_path(path: Path) -> str:
@@ -352,6 +358,8 @@ class AudioManager:
         self.live_error: str | None = None
         self.live_chunk_seconds = 0.5
         self.live_max_chunks = 24
+        self.live_profile: dict[str, Any] | None = None
+        self.live_channel: dict[str, Any] | None = None
 
     def audio_index(self) -> int:
         if self.decoder.roles is None:
@@ -393,7 +401,8 @@ class AudioManager:
                 "ok": True,
                 "mode": "noaa_live",
                 "running": self.live_is_running(),
-                "profile": NOAA_PROFILE,
+                "profile": self.live_profile or NOAA_PROFILE,
+                "channel": self.live_channel,
                 "audio_role": self.decoder.roles.get("audio") if self.decoder.roles else None,
                 "chunk_seconds": self.live_chunk_seconds,
                 "latest_sequence": self.live_sequence,
@@ -402,36 +411,39 @@ class AudioManager:
                 "last_error": self.live_error,
             }
 
-    def start_live(self) -> dict[str, Any]:
+    def _start_live_process(self, profile: dict[str, Any], channel: dict[str, Any] | None) -> dict[str, Any]:
         with self.lock:
             if self.is_running():
                 raise RuntimeError("Stop the NOAA recording before starting live listening.")
             if self.live_is_running():
-                return self.live_status()
+                raise RuntimeError("Stop the current live audio before starting a different channel.")
             rtl_fm = shutil.which("rtl_fm")
             if not rtl_fm:
                 raise RuntimeError("rtl_fm is not available in PATH.")
             index = self.audio_index()
             self.runtime_dir.mkdir(parents=True, exist_ok=True)
-            live_log_path = self.runtime_dir / "latest_noaa_live_rtl_fm.log"
+            live_log_path = self.runtime_dir / "latest_live_audio_rtl_fm.log"
             live_log_path.unlink(missing_ok=True)
             command = [
                 windows_path(Path(rtl_fm)),
                 "-d", str(index),
-                "-f", str(NOAA_PROFILE["frequency_hz"]),
-                "-M", "fm",
-                "-s", str(NOAA_PROFILE["sample_rate_hz"]),
-                "-r", str(NOAA_PROFILE["sample_rate_hz"]),
-                "-g", str(NOAA_PROFILE["gain_db"]),
+                "-f", str(profile["frequency_hz"]),
+                "-M", str(profile["rtl_fm_mode"]),
+                "-s", str(profile["sample_rate_hz"]),
+                "-r", str(profile["sample_rate_hz"]),
+                "-g", str(profile["gain_db"]),
                 "-l", "0",
-                "-E", "deemp",
             ]
+            if profile.get("deemphasis"):
+                command.extend(["-E", "deemp"])
             self.live_log_handle = live_log_path.open("wb")
             self.live_chunks = []
             self.live_sequence = 0
             self.live_error = None
+            self.live_profile = dict(profile)
+            self.live_channel = dict(channel) if channel else None
             self.live_stop_event.clear()
-            LOG.info("Starting live NOAA listening for audio serial %s at cached index %s", AUDIO_SERIAL, index)
+            LOG.info("Starting live %s listening at %s Hz for audio serial %s on cached index %s", profile["modulation"], profile["frequency_hz"], AUDIO_SERIAL, index)
             self.live_process = subprocess.Popen(
                 command,
                 cwd=windows_path(self.runtime_dir),
@@ -444,8 +456,20 @@ class AudioManager:
             self.live_thread.start()
             return self.live_status()
 
+    def start_live(self) -> dict[str, Any]:
+        profile = dict(NOAA_PROFILE)
+        profile["rtl_fm_mode"] = "fm"
+        return self._start_live_process(profile, None)
+
+    def start_airband_live(self, channel: dict[str, Any]) -> dict[str, Any]:
+        profile = dict(AIRBAND_LIVE_AUDIO_PROFILE)
+        profile["frequency_hz"] = int(channel["frequency_hz"])
+        profile["rtl_fm_mode"] = "am"
+        return self._start_live_process(profile, channel)
+
     def _pump_live_pcm(self) -> None:
-        rate = int(NOAA_PROFILE["sample_rate_hz"])
+        profile = self.live_profile or NOAA_PROFILE
+        rate = int(profile["sample_rate_hz"])
         block_bytes = int(rate * 2 * self.live_chunk_seconds)
         with self.lock:
             process = self.live_process
@@ -476,7 +500,7 @@ class AudioManager:
         with wave.open(output, "wb") as wav_file:
             wav_file.setnchannels(1)
             wav_file.setsampwidth(2)
-            wav_file.setframerate(int(NOAA_PROFILE["sample_rate_hz"]))
+            wav_file.setframerate(int((self.live_profile or NOAA_PROFILE)["sample_rate_hz"]))
             wav_file.writeframes(pcm)
         return output.getvalue()
 
@@ -787,6 +811,22 @@ class ApiHandler(BaseHTTPRequestHandler):
                 self.send_json(HTTPStatus.OK, self.audio.start_noaa())
             elif self.path == "/api/audio/noaa/live/start":
                 self.send_json(HTTPStatus.OK, self.audio.start_live())
+            elif self.path == "/api/audio/airband/live/start":
+                payload = self.read_json_body()
+                try:
+                    frequency_hz = int(payload.get("frequency_hz", 0))
+                except (TypeError, ValueError):
+                    self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "invalid_frequency_hz"})
+                    return
+                channel = self.airband.find_channel(
+                    frequency_hz,
+                    str(payload.get("serviced_facility", "")),
+                    str(payload.get("frequency_use", "")),
+                )
+                if channel is None:
+                    self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "channel_not_found_in_faa_catalog"})
+                    return
+                self.send_json(HTTPStatus.OK, self.audio.start_airband_live(channel))
             elif self.path == "/api/audio/live/stop":
                 self.send_json(HTTPStatus.OK, self.audio.stop_live())
             elif self.path == "/api/audio/stop":
