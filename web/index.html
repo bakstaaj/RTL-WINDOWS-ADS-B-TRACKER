@@ -99,13 +99,21 @@
             <option value="1.50">1.50 × pass low</option>
           </select>
         </label>
+        <label>Segment change
+          <select id="survey-segment-variation-threshold">
+            <option value="off">Off</option>
+            <option value="1.15">1.15 × segment low</option>
+            <option value="1.25" selected>1.25 × segment low</option>
+            <option value="1.50">1.50 × segment low</option>
+          </select>
+        </label>
       </div>
       <div class="airband-scan-actions">
         <button id="run-airband-survey" type="button">Run Survey Scan</button>
         <button id="stop-airband-survey" type="button" class="secondary" disabled>Stop Scan</button>
         <button id="export-airband-survey" type="button" class="secondary" disabled>Export Survey CSV</button>
       </div>
-      <div id="airband-survey-note" class="airband-survey-note">Survey Scan ranks measured AM audio level only; hit and variation marks are review cues, not confirmed voice traffic. Use Listen, Capture 10s, or Export Survey CSV for manual review.</div>
+      <div id="airband-survey-note" class="airband-survey-note">Survey Scan ranks measured AM audio level only; hit, pass-variation and segment-change marks are review cues, not confirmed voice traffic. Use Listen, Capture 10s, or Export Survey CSV for manual review.</div>
       <div id="airband-summary" class="airband-summary">Loading FAA frequency catalog…</div>
       <div id="airband-survey-results" class="airband-survey-results"></div>
       <div class="airband-table-wrap">

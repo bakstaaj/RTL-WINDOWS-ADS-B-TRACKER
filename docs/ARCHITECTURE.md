@@ -125,3 +125,7 @@ For completed multi-pass surveys, the browser retains each frequency's per-pass 
 ## Completed Survey CSV export
 
 The browser exports already-computed Survey Scan plan metadata and ranked measurement results as CSV, including candidate hit counts and cross-pass variation values. Export has no backend, tuner or audio-transport effect and therefore is validated through source/export-contract checks rather than a redundant live SDR run.
+
+## Within-sample segment variation review
+
+The browser retains per-segment RMS observations while it already assembles each Survey Scan sample. It calculates a maximum high-to-low RMS ratio across 500 ms segments and exposes the ratio as a manual-review cue and CSV evidence field. No new tuning or audio-transport request is introduced.

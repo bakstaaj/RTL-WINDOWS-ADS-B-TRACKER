@@ -19,8 +19,10 @@ grep -q 'function exportAirbandSurveyCsv' "${JS}" || { printf 'ERROR: Browser ex
 grep -q 'function surveyCsvField' "${JS}" || { printf 'ERROR: CSV field encoding is missing.\n' >&2; exit 1; }
 grep -q 'frequency_mhz' "${JS}" || { printf 'ERROR: Frequency field is not included in CSV source contract.\n' >&2; exit 1; }
 grep -q 'candidate_hits' "${JS}" || { printf 'ERROR: Candidate hit field is not included in CSV source contract.\n' >&2; exit 1; }
-grep -q 'variation_ratio' "${JS}" || { printf 'ERROR: Variation ratio field is not included in CSV source contract.\n' >&2; exit 1; }
+grep -q 'pass_variation_ratio' "${JS}" || { printf 'ERROR: Pass variation ratio field is not included in CSV source contract.\n' >&2; exit 1; }
+grep -q 'segment_variation_ratio_max' "${JS}" || { printf 'ERROR: Segment variation ratio field is not included in CSV source contract.\n' >&2; exit 1; }
 grep -q 'pass_rms_values' "${JS}" || { printf 'ERROR: Per-pass level field is not included in CSV source contract.\n' >&2; exit 1; }
+grep -q 'segment_variation_ratios' "${JS}" || { printf 'ERROR: Per-pass segment variation fields are not included in CSV source contract.\n' >&2; exit 1; }
 grep -q 'export-airband-survey").disabled=running||!airbandSurvey.results.length' "${JS}" || { printf 'ERROR: Export enablement is not gated by completed results.\n' >&2; exit 1; }
 grep -q 'exportAirbandSurveyCsv()' "${JS}" || { printf 'ERROR: Export button action is not registered.\n' >&2; exit 1; }
 grep -q 'does not retune a receiver, request audio, play audio' "${DOC}" || { printf 'ERROR: Export documentation lacks unchanged-radio boundary.\n' >&2; exit 1; }

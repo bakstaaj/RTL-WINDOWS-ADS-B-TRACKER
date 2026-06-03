@@ -161,3 +161,7 @@ Survey Scan can mark channels whose measured RMS changes across completed passes
 ## Completed Survey CSV export
 
 Completed Survey Scan results can be exported to CSV with FAA channel details, survey-plan parameters, RMS levels, candidate hits, variation ratio and manual-review labels. Export is evidence collection only and performs no new radio/audio action. See `docs/AIRBAND_SURVEY_EXPORT.md`.
+
+## Within-sample airband segment variation review
+
+Survey Scan can mark channels whose level changes among the 500 ms audio segments already collected within an observation. This adds an intermittent-signal review cue without changing radio/audio transport or declaring voice activity. See `docs/AIRBAND_SEGMENT_VARIATION_REVIEW.md`.
