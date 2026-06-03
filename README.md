@@ -75,3 +75,20 @@ cd ~/sdrdev/RTL-Windows-ADS-B-Tracker
 ```
 
 See `docs/ADSB_DECODER_INTEGRATION.md` and `external/dump1090/README.md` for upstream attribution and the documented compatibility patch.
+
+## Initial backend API
+
+The application-owned backend now wraps the validated Windows Dump1090 decoder behind stable API endpoints. It performs the required sequential device-role resolution before launching ADS-B decoding and proxies live aircraft JSON for the future web interface.
+
+```bash
+cd ~/sdrdev/RTL-Windows-ADS-B-Tracker
+./tools/run_backend_dev.sh
+```
+
+Development API base URL:
+
+```text
+http://127.0.0.1:8090
+```
+
+See `docs/BACKEND_API.md` for endpoints and validation instructions.

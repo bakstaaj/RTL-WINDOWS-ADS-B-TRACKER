@@ -59,3 +59,9 @@ Validated initial live profile:
 ```
 
 Dump1090 exposes live state through `/data/aircraft.json`, which is the initial aircraft-data contract for the future local backend and browser UI.
+
+## Backend API process boundary
+
+The first application backend is implemented using the Python standard library and owns Dump1090 lifecycle control. The future browser UI communicates only with backend API endpoints such as `/api/status` and `/api/aircraft`; Dump1090 remains an internal decoder service.
+
+This separation allows later NOAA/Airband controls, map state, settings persistence and trail history to be added without coupling UI code directly to third-party decoder process behavior.
