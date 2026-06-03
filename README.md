@@ -125,3 +125,7 @@ The application imports official FAA NASR `FRQ.csv` airband records into exclude
 ## Manual live airband listening baseline
 
 Each nearby FAA airband channel can be selected for live AM listening on the dedicated audio receiver while ADS-B continues operating. The backend validates the selected frequency against the imported FAA catalog before tuning and reuses rolling WAV/Web Audio delivery. See `docs/AIRBAND_LISTENING.md`.
+
+## Bounded airband Survey Scan baseline
+
+The Nearby Airband Channels panel supports a bounded **Survey Scan** that measures and ranks short AM audio samples from nearby unique FAA frequencies while preserving manual Listen behavior. This baseline is deliberately observational: it does not claim traffic detection or automatically hold/play a channel. See `docs/AIRBAND_SURVEY_SCAN.md`.

@@ -44,8 +44,14 @@
     </section>
     <section class="panel airband-panel">
       <div class="panel-title"><h2>Nearby Airband Channels</h2><span id="airband-source" class="badge">FAA</span></div>
-      <p class="airband-help">Nearest channels within 100 miles of the saved receiver location. Select Listen to monitor a channel in AM mode.</p>
+      <p class="airband-help">Nearest channels within 100 miles of the saved receiver location. Select Listen to monitor a channel in AM mode, or run a bounded level survey.</p>
+      <div class="airband-scan-actions">
+        <button id="run-airband-survey" type="button">Run Survey Scan</button>
+        <button id="stop-airband-survey" type="button" class="secondary" disabled>Stop Scan</button>
+      </div>
+      <div id="airband-survey-note" class="airband-survey-note">Survey Scan ranks measured AM audio level only; it does not identify active voice traffic.</div>
       <div id="airband-summary" class="airband-summary">Loading FAA frequency catalog…</div>
+      <div id="airband-survey-results" class="airband-survey-results"></div>
       <div class="airband-table-wrap">
         <table class="airband-table">
           <thead><tr><th>Dist</th><th>Freq</th><th>Use</th><th>Facility</th><th></th></tr></thead>

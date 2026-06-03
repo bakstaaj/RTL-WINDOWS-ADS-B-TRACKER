@@ -89,3 +89,7 @@ Official FAA NASR `FRQ.csv` is imported into an excluded runtime JSON catalog. T
 ## FAA-selected live airband audio
 
 Manual airband listening accepts only a selected record present in the imported FAA runtime catalog, then tunes the cached audio-role receiver in AM mode. It reuses the existing live rolling-WAV transport and remains mutually exclusive with NOAA live/listen/record operations on serial `00000162`.
+
+## Bounded airband survey measurement
+
+The browser can sequence existing FAA-validated AM live-audio requests across a small bounded set of nearby unique frequencies, decode rolling WAV segments without speaker playback, and display RMS rankings. This deliberately avoids introducing an autonomous detection/hold policy until local measurements and listening review support a validated activity discriminator.
