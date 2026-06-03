@@ -45,3 +45,7 @@ footer{padding:7px 16px;border-top:1px solid var(--line);color:var(--muted);font
 .airband-survey-plan select{display:block;width:100%;margin-top:4px;background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:5px;padding:6px 5px;font-size:12px;text-transform:none;letter-spacing:normal}
 
 .survey-review-listen{font-size:10px;padding:5px 6px;margin:0;white-space:nowrap}.survey-review-listen:disabled{opacity:.55}
+
+.airband-capture,.survey-review-capture{font-size:10px;padding:5px 6px;margin:0 0 0 4px;white-space:nowrap}
+.airband-capture:disabled,.survey-review-capture:disabled{opacity:.55}
+.capture-active{color:var(--accent);font-weight:600}

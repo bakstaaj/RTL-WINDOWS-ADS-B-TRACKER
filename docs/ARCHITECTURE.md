@@ -101,3 +101,7 @@ The browser supplies bounded survey-plan controls that filter the existing FAA-r
 ## Manual review of ranked survey results
 
 Ranked browser-side Survey Scan results retain their underlying FAA catalog record. A manual result-row Listen action passes that record to the already validated AM live-listening path, providing operator confirmation without introducing backend auto-selection, voice detection, channel hold or automatic playback.
+
+## Operator-triggered bounded Airband Capture
+
+The browser reuses the existing FAA-validated live AM segment endpoint to receive a fixed 10-second selected-channel sample without speaker playback, merges decoded mono audio into a client-side WAV download, and labels it from the FAA result record. No new backend tuner mode or automatic detector/hold state is introduced.

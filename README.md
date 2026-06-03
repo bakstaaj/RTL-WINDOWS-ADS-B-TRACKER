@@ -137,3 +137,7 @@ The bounded Survey Scan panel supports operator-selected radius, number of uniqu
 ## Survey result manual Listen review
 
 Completed Survey Scan result rows include a manual **Listen** action, allowing an operator to audition a ranked FAA-validated AM candidate without locating it again in the full channel list. Survey Scan remains measurement-only and silent until the operator selects a result. See `docs/AIRBAND_SURVEY_REVIEW.md`.
+
+## Bounded Airband Capture review
+
+Nearby FAA channels and completed Survey Scan results can be captured manually to a labeled 10-second WAV download through the existing validated AM transport. This supplies review material for later detector design while retaining an operator-triggered, no-auto-hold boundary. See `docs/AIRBAND_CAPTURE_REVIEW.md`.
