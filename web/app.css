@@ -39,3 +39,7 @@ footer{padding:7px 16px;border-top:1px solid var(--line);color:var(--muted);font
 .airband-survey-results.ready{display:block}.survey-head,.survey-row{display:grid;grid-template-columns:34px 78px 74px 1fr;gap:6px;padding:6px 7px;font-size:11px;align-items:center}
 .survey-head{background:var(--panel2);color:var(--muted);font-weight:600}.survey-row{border-top:1px solid var(--line)}
 .survey-row .strong{color:var(--accent);font-weight:600}.survey-progress{padding:8px;color:var(--muted);font-size:12px}
+
+.airband-survey-plan{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:10px 0}
+.airband-survey-plan label{font-size:10px;color:var(--muted);letter-spacing:.05em;text-transform:uppercase}
+.airband-survey-plan select{display:block;width:100%;margin-top:4px;background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:5px;padding:6px 5px;font-size:12px;text-transform:none;letter-spacing:normal}

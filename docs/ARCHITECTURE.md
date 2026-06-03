@@ -93,3 +93,7 @@ Manual airband listening accepts only a selected record present in the imported 
 ## Bounded airband survey measurement
 
 The browser can sequence existing FAA-validated AM live-audio requests across a small bounded set of nearby unique frequencies, decode rolling WAV segments without speaker playback, and display RMS rankings. This deliberately avoids introducing an autonomous detection/hold policy until local measurements and listening review support a validated activity discriminator.
+
+## Operator-configured airband survey planning
+
+The browser supplies bounded survey-plan controls that filter the existing FAA-ranked channel API response before making FAA-validated live AM requests. Category filtering and sample-duration choices remain UI-side measurement behavior; no autonomous traffic detector or backend scan scheduler is introduced.

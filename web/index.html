@@ -45,6 +45,38 @@
     <section class="panel airband-panel">
       <div class="panel-title"><h2>Nearby Airband Channels</h2><span id="airband-source" class="badge">FAA</span></div>
       <p class="airband-help">Nearest channels within 100 miles of the saved receiver location. Select Listen to monitor a channel in AM mode, or run a bounded level survey.</p>
+      <div class="airband-survey-plan" aria-label="Survey Scan Plan">
+        <label>Radius
+          <select id="survey-radius-miles">
+            <option value="25">25 mi</option>
+            <option value="50">50 mi</option>
+            <option value="100" selected>100 mi</option>
+            <option value="200">200 mi</option>
+          </select>
+        </label>
+        <label>Channels
+          <select id="survey-max-channels">
+            <option value="5">5</option>
+            <option value="10" selected>10</option>
+            <option value="20">20</option>
+          </select>
+        </label>
+        <label>Sample
+          <select id="survey-sample-chunks">
+            <option value="2" selected>1 sec</option>
+            <option value="4">2 sec</option>
+            <option value="6">3 sec</option>
+          </select>
+        </label>
+        <label>Category
+          <select id="survey-category">
+            <option value="all" selected>All</option>
+            <option value="weather">Weather / ATIS</option>
+            <option value="local">CTAF / UNICOM</option>
+            <option value="control">Tower / Ground / Approach</option>
+          </select>
+        </label>
+      </div>
       <div class="airband-scan-actions">
         <button id="run-airband-survey" type="button">Run Survey Scan</button>
         <button id="stop-airband-survey" type="button" class="secondary" disabled>Stop Scan</button>

@@ -129,3 +129,7 @@ Each nearby FAA airband channel can be selected for live AM listening on the ded
 ## Bounded airband Survey Scan baseline
 
 The Nearby Airband Channels panel supports a bounded **Survey Scan** that measures and ranks short AM audio samples from nearby unique FAA frequencies while preserving manual Listen behavior. This baseline is deliberately observational: it does not claim traffic detection or automatically hold/play a channel. See `docs/AIRBAND_SURVEY_SCAN.md`.
+
+## Configurable Airband Survey Plan
+
+The bounded Survey Scan panel supports operator-selected radius, number of unique frequencies, sample duration and channel category grouping. These options make the measurement workflow useful for continuous Weather/ATIS signals or sporadic operational channels without adding unvalidated automatic activity/hold behavior. See `docs/AIRBAND_SURVEY_PLAN.md`.
