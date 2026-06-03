@@ -153,3 +153,7 @@ Survey Scan supports an operator-selected measured-level rule that marks above-l
 ## Multi-pass candidate observation
 
 Survey Scan supports repeated bounded passes and displays above-level hit counts per FAA channel. Repeat hits improve operator prioritization for Listen/Capture review but remain measurements only, not traffic detection or automatic hold behavior. See `docs/AIRBAND_MULTIPASS_OBSERVATION.md`.
+
+## Cross-pass airband variation review
+
+Survey Scan can mark channels whose measured RMS changes across completed passes, helping prioritize intermittent candidates for manual Listen/Capture review. Variation is a review cue only and does not declare traffic or automatically hold/play a channel. See `docs/AIRBAND_CROSS_PASS_VARIATION_REVIEW.md`.

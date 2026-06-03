@@ -117,3 +117,7 @@ Application milestones are built on isolated feature branches from synchronized 
 ## Multi-pass candidate observations
 
 The browser can repeat a bounded Survey plan for 1, 3 or 5 passes, computes a per-pass median RMS candidate threshold, and aggregates average RMS plus above-level hit counts for each FAA channel. Hit persistence is displayed for operator review only; it does not create backend auto-hold, playback or traffic-detection state.
+
+## Cross-pass airband variation review
+
+For completed multi-pass surveys, the browser retains each frequency's per-pass RMS observations and calculates a high-to-low variation ratio. An operator-selected marker can label channels with changing measured level for manual review, without adding backend traffic classification, auto-hold or playback state.

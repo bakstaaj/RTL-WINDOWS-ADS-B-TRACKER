@@ -91,12 +91,20 @@
             <option value="5">5 passes</option>
           </select>
         </label>
+        <label>Variation mark
+          <select id="survey-variation-threshold">
+            <option value="off">Off</option>
+            <option value="1.15">1.15 × pass low</option>
+            <option value="1.25" selected>1.25 × pass low</option>
+            <option value="1.50">1.50 × pass low</option>
+          </select>
+        </label>
       </div>
       <div class="airband-scan-actions">
         <button id="run-airband-survey" type="button">Run Survey Scan</button>
         <button id="stop-airband-survey" type="button" class="secondary" disabled>Stop Scan</button>
       </div>
-      <div id="airband-survey-note" class="airband-survey-note">Survey Scan ranks measured AM audio level only; repeat hits mean above a selected rule across survey passes, not confirmed voice traffic. Use Listen or Capture 10s for manual review.</div>
+      <div id="airband-survey-note" class="airband-survey-note">Survey Scan ranks measured AM audio level only; hit and variation marks are review cues, not confirmed voice traffic. Use Listen or Capture 10s for manual review.</div>
       <div id="airband-summary" class="airband-summary">Loading FAA frequency catalog…</div>
       <div id="airband-survey-results" class="airband-survey-results"></div>
       <div class="airband-table-wrap">
