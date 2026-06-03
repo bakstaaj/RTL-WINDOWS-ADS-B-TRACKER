@@ -121,3 +121,7 @@ The browser can repeat a bounded Survey plan for 1, 3 or 5 passes, computes a pe
 ## Cross-pass airband variation review
 
 For completed multi-pass surveys, the browser retains each frequency's per-pass RMS observations and calculates a high-to-low variation ratio. An operator-selected marker can label channels with changing measured level for manual review, without adding backend traffic classification, auto-hold or playback state.
+
+## Completed Survey CSV export
+
+The browser exports already-computed Survey Scan plan metadata and ranked measurement results as CSV, including candidate hit counts and cross-pass variation values. Export has no backend, tuner or audio-transport effect and therefore is validated through source/export-contract checks rather than a redundant live SDR run.

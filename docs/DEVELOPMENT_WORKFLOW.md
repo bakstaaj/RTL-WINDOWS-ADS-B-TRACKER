@@ -21,3 +21,7 @@ git branch -D feature/<feature-name>
 ```
 
 Generated catalogs, runtime settings, logs, audio samples, caches and build artifacts remain excluded from publication.
+
+## Selecting validation scope
+
+A feature that changes tuner control, audio transport, backend concurrency or ADS-B interaction receives one meaningful live hardware/API validation. A feature confined to browser presentation or export of already-computed measurements receives source, syntax and output-contract validation without repeating an unchanged SDR exercise.

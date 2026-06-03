@@ -157,3 +157,7 @@ Survey Scan supports repeated bounded passes and displays above-level hit counts
 ## Cross-pass airband variation review
 
 Survey Scan can mark channels whose measured RMS changes across completed passes, helping prioritize intermittent candidates for manual Listen/Capture review. Variation is a review cue only and does not declare traffic or automatically hold/play a channel. See `docs/AIRBAND_CROSS_PASS_VARIATION_REVIEW.md`.
+
+## Completed Survey CSV export
+
+Completed Survey Scan results can be exported to CSV with FAA channel details, survey-plan parameters, RMS levels, candidate hits, variation ratio and manual-review labels. Export is evidence collection only and performs no new radio/audio action. See `docs/AIRBAND_SURVEY_EXPORT.md`.
