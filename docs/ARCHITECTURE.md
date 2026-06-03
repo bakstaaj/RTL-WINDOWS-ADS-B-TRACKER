@@ -69,3 +69,7 @@ This separation allows later NOAA/Airband controls, map state, settings persiste
 ## Live map browser interface
 
 The initial browser UI is served directly by the Python backend and consumes `/api/status` and `/api/aircraft`. It includes receiver rings, oriented aircraft markers, a selected-aircraft detail view and browser-session trails. Keeping Dump1090 internal preserves the application API boundary for later audio controls, persisted settings and history restoration.
+
+## NOAA audio operation baseline
+
+The backend owns a second audio operation manager for the NOAA/Airband receiver. Initial NOAA operation is a bounded NFM recording at 162.500 MHz that produces a WAV file served to the browser for playback. It uses the cached numeric index for serial `00000162` from the same pre-decoder role mapping that assigns ADS-B serial `00001090`; it does not enumerate serial roles concurrently with active ADS-B decoding.

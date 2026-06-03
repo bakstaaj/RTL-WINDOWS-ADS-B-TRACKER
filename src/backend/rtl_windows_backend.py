@@ -13,15 +13,19 @@ Startup rule enforced here:
 
 from __future__ import annotations
 
+from array import array
 import argparse
 import json
 import logging
 import mimetypes
+import math
 import shutil
 import signal
 import subprocess
+import sys
 import threading
 import time
+import wave
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -38,6 +42,13 @@ RECEIVER_LOCATION = {
     "longitude": -105.1783,
     "label": "Cripple Creek receiver",
     "source": "initial_development_default",
+}
+NOAA_PROFILE = {
+    "frequency_hz": 162500000,
+    "modulation": "nfm",
+    "sample_rate_hz": 24000,
+    "gain_db": 40.2,
+    "deemphasis": True,
 }
 
 
@@ -88,11 +99,18 @@ class DecoderManager:
         self.check_runtime_files()
         completed = subprocess.run(
             [windows_path(self.probe), "--json"],
-            check=True,
+            check=False,
             capture_output=True,
             text=True,
             timeout=10,
         )
+        if completed.returncode != 0:
+            stdout = completed.stdout.strip() or "<empty>"
+            stderr = completed.stderr.strip() or "<empty>"
+            raise RuntimeError(
+                f"Device-role probe failed with exit code {completed.returncode}; "
+                f"stdout={stdout}; stderr={stderr}"
+            )
         mapping = json.loads(completed.stdout.strip())
         if not mapping.get("ok"):
             raise RuntimeError(f"Device-role probe reported failure: {mapping}")
@@ -242,12 +260,181 @@ class DecoderManager:
         }
 
 
+class AudioManager:
+    # Own a bounded NOAA/NFM recording on the dedicated second receiver.
+    # It reuses DecoderManager.roles, resolved before Dump1090 started.
+
+    def __init__(self, decoder: DecoderManager, record_seconds: int) -> None:
+        self.decoder = decoder
+        self.record_seconds = max(3, int(record_seconds))
+        self.runtime_dir = decoder.root / "runtime" / "settings" / "audio"
+        self.raw_path = self.runtime_dir / "latest_noaa.raw"
+        self.wav_path = self.runtime_dir / "latest_noaa.wav"
+        self.log_path = self.runtime_dir / "latest_noaa_rtl_fm.log"
+        self.process: subprocess.Popen[str] | None = None
+        self.log_handle: Any = None
+        self.lock = threading.RLock()
+        self.active_token: int | None = None
+        self.token_counter = 0
+        self.started_at: float | None = None
+        self.completed_at: float | None = None
+        self.metrics: dict[str, Any] | None = None
+        self.last_error: str | None = None
+
+    def audio_index(self) -> int:
+        if self.decoder.roles is None:
+            self.decoder.resolve_roles()
+        assert self.decoder.roles is not None
+        role = self.decoder.roles.get("audio", {})
+        if role.get("serial") != AUDIO_SERIAL:
+            raise RuntimeError(f"NOAA/Airband serial {AUDIO_SERIAL} is not mapped: {self.decoder.roles}")
+        return int(role["index"])
+
+    def is_running(self) -> bool:
+        return self.process is not None and self.process.poll() is None and self.active_token is not None
+
+    def status(self) -> dict[str, Any]:
+        remaining_seconds: int | None = None
+        if self.is_running() and self.started_at is not None:
+            remaining_seconds = max(0, int(round(self.record_seconds - (time.time() - self.started_at))))
+        audio_role = self.decoder.roles.get("audio") if self.decoder.roles else None
+        return {
+            "ok": True,
+            "mode": "noaa_recording",
+            "running": self.is_running(),
+            "profile": NOAA_PROFILE,
+            "record_seconds": self.record_seconds,
+            "remaining_seconds": remaining_seconds,
+            "audio_role": audio_role,
+            "recording_ready": self.wav_path.exists(),
+            "latest_recording_url": "/api/audio/latest.wav" if self.wav_path.exists() else None,
+            "metrics": self.metrics,
+            "last_error": self.last_error,
+        }
+
+    def start_noaa(self) -> dict[str, Any]:
+        with self.lock:
+            if self.is_running():
+                return self.status()
+            self.last_error = None
+            rtl_fm = shutil.which("rtl_fm")
+            if not rtl_fm:
+                raise RuntimeError("rtl_fm is not available in PATH.")
+            index = self.audio_index()
+            self.runtime_dir.mkdir(parents=True, exist_ok=True)
+            for path in (self.raw_path, self.wav_path, self.log_path):
+                path.unlink(missing_ok=True)
+            command = [
+                windows_path(Path(rtl_fm)),
+                "-d", str(index),
+                "-f", str(NOAA_PROFILE["frequency_hz"]),
+                "-M", "fm",
+                "-s", str(NOAA_PROFILE["sample_rate_hz"]),
+                "-r", str(NOAA_PROFILE["sample_rate_hz"]),
+                "-g", str(NOAA_PROFILE["gain_db"]),
+                "-l", "0",
+                "-E", "deemp",
+                windows_path(self.raw_path),
+            ]
+            self.log_handle = self.log_path.open("w", encoding="utf-8", newline="\n")
+            LOG.info("Starting NOAA recording for audio serial %s at cached index %s", AUDIO_SERIAL, index)
+            self.process = subprocess.Popen(
+                command,
+                cwd=windows_path(self.runtime_dir),
+                stdout=self.log_handle,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            self.started_at = time.time()
+            self.completed_at = None
+            self.metrics = None
+            self.token_counter += 1
+            token = self.token_counter
+            self.active_token = token
+            threading.Thread(target=self._monitor, args=(token,), daemon=True).start()
+            return self.status()
+
+    def _monitor(self, token: int) -> None:
+        deadline = time.time() + self.record_seconds
+        while time.time() < deadline:
+            with self.lock:
+                if self.active_token != token:
+                    return
+                if self.process is not None and self.process.poll() is not None:
+                    break
+            time.sleep(0.2)
+        self._finish(token)
+
+    def _finish(self, token: int) -> None:
+        with self.lock:
+            if self.active_token != token:
+                return
+            try:
+                if self.process is not None and self.process.poll() is None:
+                    self.process.terminate()
+                    try:
+                        self.process.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        self.process.kill()
+                        self.process.wait(timeout=3)
+                if self.log_handle is not None:
+                    self.log_handle.close()
+                    self.log_handle = None
+                self.process = None
+                self.active_token = None
+                self.completed_at = time.time()
+                self.metrics = self._write_wav()
+                LOG.info("Completed NOAA recording: %s", self.metrics)
+            except Exception as exc:
+                self.last_error = str(exc)
+                LOG.exception("Unable to finalize NOAA recording")
+
+    def stop(self) -> dict[str, Any]:
+        with self.lock:
+            token = self.active_token
+        if token is not None:
+            self._finish(token)
+        return self.status()
+
+    def _write_wav(self) -> dict[str, Any]:
+        raw = self.raw_path.read_bytes() if self.raw_path.exists() else b""
+        if len(raw) % 2:
+            raw = raw[:-1]
+        if not raw:
+            raise RuntimeError("rtl_fm completed without captured NOAA audio samples.")
+        samples = array("h")
+        samples.frombytes(raw)
+        if sys.byteorder != "little":
+            samples.byteswap()
+        count = len(samples)
+        sample_rate = int(NOAA_PROFILE["sample_rate_hz"])
+        peak = max(abs(sample) for sample in samples)
+        rms = math.sqrt(sum(sample * sample for sample in samples) / count)
+        clipped = sum(1 for sample in samples if abs(sample) >= 32760) * 100.0 / count
+        with wave.open(str(self.wav_path), "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(sample_rate)
+            wav_file.writeframes(raw)
+        return {
+            "duration_seconds": round(count / sample_rate, 3),
+            "sample_rate_hz": sample_rate,
+            "peak_abs_sample": peak,
+            "rms_sample": round(rms, 2),
+            "clipped_percent": round(clipped, 6),
+        }
+
+
 class ApiHandler(BaseHTTPRequestHandler):
     server_version = "RTLWindowsADSBBackend/0.1"
 
     @property
     def manager(self) -> DecoderManager:
         return self.server.manager  # type: ignore[attr-defined]
+
+    @property
+    def audio(self) -> AudioManager:
+        return self.server.audio_manager  # type: ignore[attr-defined]
 
     def log_message(self, format: str, *args: Any) -> None:
         LOG.info("%s - %s", self.address_string(), format % args)
@@ -308,6 +495,13 @@ class ApiHandler(BaseHTTPRequestHandler):
                     self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"ok": False, "error": "decoder_not_running"})
                 else:
                     self.send_json(HTTPStatus.OK, self.manager.query_aircraft())
+            elif route == "/api/audio/status":
+                self.send_json(HTTPStatus.OK, self.audio.status())
+            elif route == "/api/audio/latest.wav":
+                if self.audio.wav_path.exists():
+                    self.send_file(self.audio.wav_path)
+                else:
+                    self.send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "no_recording"})
             else:
                 self.send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not_found"})
         except Exception as exc:
@@ -321,6 +515,10 @@ class ApiHandler(BaseHTTPRequestHandler):
             elif self.path == "/api/decoder/stop":
                 self.manager.stop()
                 self.send_json(HTTPStatus.OK, self.manager.status())
+            elif self.path == "/api/audio/noaa/start":
+                self.send_json(HTTPStatus.OK, self.audio.start_noaa())
+            elif self.path == "/api/audio/stop":
+                self.send_json(HTTPStatus.OK, self.audio.stop())
             else:
                 self.send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not_found"})
         except Exception as exc:
@@ -333,6 +531,7 @@ def main() -> int:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8090)
     parser.add_argument("--dump-http-port", type=int, default=18080)
+    parser.add_argument("--audio-record-seconds", type=int, default=30)
     parser.add_argument("--autostart", action="store_true", help="Start ADS-B decoder on backend startup.")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
@@ -344,11 +543,14 @@ def main() -> int:
 
     root = Path(__file__).resolve().parents[2]
     manager = DecoderManager(root, args.dump_http_port)
+    audio_manager = AudioManager(manager, args.audio_record_seconds)
     server = ThreadingHTTPServer((args.host, args.port), ApiHandler)
     server.manager = manager  # type: ignore[attr-defined]
+    server.audio_manager = audio_manager  # type: ignore[attr-defined]
 
     def shutdown_handler(signum: int, frame: Any) -> None:
         del signum, frame
+        audio_manager.stop()
         manager.stop()
         raise KeyboardInterrupt
 
@@ -363,6 +565,7 @@ def main() -> int:
     except KeyboardInterrupt:
         LOG.info("Backend shutdown requested")
     finally:
+        audio_manager.stop()
         manager.stop()
         server.server_close()
     return 0

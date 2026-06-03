@@ -103,3 +103,9 @@ cd ~/sdrdev/RTL-Windows-ADS-B-Tracker
 ```
 
 Then browse to `http://127.0.0.1:8090/`. The UI displays live markers and browser-session trails using application API endpoints rather than directly coupling the browser to Dump1090. See `docs/WEB_MAP_UI.md`.
+
+## NOAA Weather Radio recording baseline
+
+The second RTL-SDR receiver supports backend-managed NOAA recording. Serial `00000162` records the validated local channel at `162.500 MHz` using NFM, 24 kHz output, 40.2 dB gain and de-emphasis while ADS-B continues on serial `00001090`.
+
+The initial UI provides a bounded Record NOAA / playback workflow. See `docs/NOAA_AUDIO.md`.

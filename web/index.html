@@ -30,6 +30,16 @@
         <div><dt>Receiver</dt><dd id="receiver-label">—</dd></div>
       </dl>
     </section>
+    <section class="panel audio-panel">
+      <div class="panel-title"><h2>NOAA Weather Radio</h2><span id="audio-state" class="badge">Idle</span></div>
+      <p class="audio-channel">162.500 MHz NFM · audio receiver <span id="audio-role">—</span></p>
+      <div class="audio-actions">
+        <button id="record-noaa">Record NOAA</button>
+        <button id="stop-audio" class="secondary">Stop</button>
+      </div>
+      <div id="audio-progress" class="audio-progress">No recording captured this session.</div>
+      <audio id="audio-playback" controls preload="none"></audio>
+    </section>
     <section class="panel">
       <h2>Selected Aircraft</h2>
       <div id="selected-details" class="placeholder">Select an aircraft marker or table row.</div>
