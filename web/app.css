@@ -36,7 +36,7 @@ footer{padding:7px 16px;border-top:1px solid var(--line);color:var(--muted);font
 .airband-scan-actions{display:flex;gap:8px;margin:9px 0}.airband-scan-actions button{margin:0;font-size:12px;padding:7px 10px}
 .airband-survey-note{font-size:11px;color:var(--muted);line-height:1.35;margin-bottom:9px}
 .airband-survey-results{display:none;margin:9px 0 12px;border:1px solid var(--line);border-radius:6px;overflow:hidden}
-.airband-survey-results.ready{display:block}.survey-head,.survey-row{display:grid;grid-template-columns:34px 78px 74px 1fr 78px 122px;gap:6px;padding:6px 7px;font-size:11px;align-items:center}
+.airband-survey-results.ready{display:block}.survey-head,.survey-row{display:grid;grid-template-columns:34px 78px 66px 48px 1fr 78px 122px;gap:6px;padding:6px 7px;font-size:11px;align-items:center}
 .survey-head{background:var(--panel2);color:var(--muted);font-weight:600}.survey-row{border-top:1px solid var(--line)}
 .survey-row .strong{color:var(--accent);font-weight:600}.survey-progress{padding:8px;color:var(--muted);font-size:12px}
 
@@ -53,3 +53,6 @@ footer{padding:7px 16px;border-top:1px solid var(--line);color:var(--muted);font
 .candidate-above-level{display:inline-block;color:var(--accent);font-weight:600;font-size:10px}
 .candidate-review{display:inline-block;color:var(--muted);font-size:10px}
 .survey-candidate-summary{padding:7px;color:var(--muted);font-size:11px;border-bottom:1px solid var(--line)}
+
+.candidate-hit-count{font-size:10px;color:var(--muted)}
+.candidate-hit-count.repeat{color:var(--accent);font-weight:600}

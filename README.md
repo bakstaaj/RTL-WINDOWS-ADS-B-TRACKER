@@ -149,3 +149,7 @@ New milestones use isolated feature branches, lightweight source checks and one 
 ## Candidate-level airband review
 
 Survey Scan supports an operator-selected measured-level rule that marks above-level candidates relative to the survey median. Candidate status is measurement-only and requires manual Listen or Capture review; it does not declare traffic or automatically hold/play a channel. See `docs/AIRBAND_CANDIDATE_LEVEL_REVIEW.md`.
+
+## Multi-pass candidate observation
+
+Survey Scan supports repeated bounded passes and displays above-level hit counts per FAA channel. Repeat hits improve operator prioritization for Listen/Capture review but remain measurements only, not traffic detection or automatic hold behavior. See `docs/AIRBAND_MULTIPASS_OBSERVATION.md`.

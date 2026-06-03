@@ -113,3 +113,7 @@ The browser can compute the median RMS of a completed bounded survey and apply a
 ## Feature-branch validation and publication
 
 Application milestones are built on isolated feature branches from synchronized `main`, receive lightweight source checks plus one meaningful live validation, then are committed and fast-forwarded to `main` for publication. Failed work remains isolated from published source until repaired or discarded.
+
+## Multi-pass candidate observations
+
+The browser can repeat a bounded Survey plan for 1, 3 or 5 passes, computes a per-pass median RMS candidate threshold, and aggregates average RMS plus above-level hit counts for each FAA channel. Hit persistence is displayed for operator review only; it does not create backend auto-hold, playback or traffic-detection state.
