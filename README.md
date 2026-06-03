@@ -165,3 +165,7 @@ Completed Survey Scan results can be exported to CSV with FAA channel details, s
 ## Within-sample airband segment variation review
 
 Survey Scan can mark channels whose level changes among the 500 ms audio segments already collected within an observation. This adds an intermittent-signal review cue without changing radio/audio transport or declaring voice activity. See `docs/AIRBAND_SEGMENT_VARIATION_REVIEW.md`.
+
+## Airband Survey review filter and reasons
+
+Completed Survey Scan evidence can be filtered to marked results, above-level results, repeat hits, pass changes or segment changes. Each displayed row reports its review reason, and CSV export preserves reason/filter context without causing a radio action. See `docs/AIRBAND_SURVEY_REVIEW_FILTER.md`.

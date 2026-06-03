@@ -129,3 +129,7 @@ The browser exports already-computed Survey Scan plan metadata and ranked measur
 ## Within-sample segment variation review
 
 The browser retains per-segment RMS observations while it already assembles each Survey Scan sample. It calculates a maximum high-to-low RMS ratio across 500 ms segments and exposes the ratio as a manual-review cue and CSV evidence field. No new tuning or audio-transport request is introduced.
+
+## Airband Survey review filter and reason labels
+
+The browser derives normalized review flags from completed survey evidence and allows operators to filter displayed rows by flag while retaining all results for CSV evidence export. This is a presentation/export layer over existing measurements and introduces no tuner, audio-transport, backend or hold-state behavior.

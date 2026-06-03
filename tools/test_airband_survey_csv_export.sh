@@ -23,6 +23,8 @@ grep -q 'pass_variation_ratio' "${JS}" || { printf 'ERROR: Pass variation ratio 
 grep -q 'segment_variation_ratio_max' "${JS}" || { printf 'ERROR: Segment variation ratio field is not included in CSV source contract.\n' >&2; exit 1; }
 grep -q 'pass_rms_values' "${JS}" || { printf 'ERROR: Per-pass level field is not included in CSV source contract.\n' >&2; exit 1; }
 grep -q 'segment_variation_ratios' "${JS}" || { printf 'ERROR: Per-pass segment variation fields are not included in CSV source contract.\n' >&2; exit 1; }
+grep -q 'review_reasons' "${JS}" || { printf 'ERROR: Review reasons are not included in CSV source contract.\n' >&2; exit 1; }
+grep -q 'result_filter' "${JS}" || { printf 'ERROR: Review filter context is not included in CSV source contract.\n' >&2; exit 1; }
 grep -q 'export-airband-survey").disabled=running||!airbandSurvey.results.length' "${JS}" || { printf 'ERROR: Export enablement is not gated by completed results.\n' >&2; exit 1; }
 grep -q 'exportAirbandSurveyCsv()' "${JS}" || { printf 'ERROR: Export button action is not registered.\n' >&2; exit 1; }
 grep -q 'does not retune a receiver, request audio, play audio' "${DOC}" || { printf 'ERROR: Export documentation lacks unchanged-radio boundary.\n' >&2; exit 1; }

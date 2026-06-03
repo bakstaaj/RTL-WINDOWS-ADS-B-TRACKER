@@ -11,10 +11,11 @@ Each result row includes:
 - Export timestamp and result rank.
 - FAA channel frequency, facility, use, category and distance.
 - Average RMS level, candidate hit count and measured passes.
-- Cross-pass variation ratio, maximum within-sample segment-variation ratio and the displayed manual-review label.
+- Cross-pass variation ratio, maximum within-sample segment-variation ratio, displayed manual-review label and review reasons.
 - Survey category, radius, sample duration, pass count and threshold settings.
 - Per-pass RMS values.
 - Per-pass segment-variation ratios.
+- Currently selected review filter for display context.
 
 ## Behavior boundary
 
