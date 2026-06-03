@@ -38,7 +38,7 @@ from urllib.request import urlopen
 LOG = logging.getLogger("rtl_windows_backend")
 ADSB_SERIAL = "00001090"
 AUDIO_SERIAL = "00000162"
-RECEIVER_LOCATION = {
+DEFAULT_RECEIVER_LOCATION = {
     "latitude": 38.7467,
     "longitude": -105.1783,
     "label": "Cripple Creek receiver",
@@ -68,12 +68,70 @@ def windows_path(path: Path) -> str:
     return result.stdout.strip()
 
 
+class SettingsStore:
+    # Persist user-adjustable application settings outside tracked source.
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.lock = threading.RLock()
+        self.data: dict[str, Any] = {
+            "receiver_location": dict(DEFAULT_RECEIVER_LOCATION),
+        }
+        self._load()
+
+    def _validate_location(self, payload: dict[str, Any]) -> dict[str, Any]:
+        try:
+            latitude = float(payload["latitude"])
+            longitude = float(payload["longitude"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("Receiver latitude and longitude must be numeric.") from exc
+        if not -90.0 <= latitude <= 90.0:
+            raise ValueError("Receiver latitude must be between -90 and 90.")
+        if not -180.0 <= longitude <= 180.0:
+            raise ValueError("Receiver longitude must be between -180 and 180.")
+        label = str(payload.get("label", "Receiver")).strip() or "Receiver"
+        if len(label) > 80:
+            raise ValueError("Receiver location label must be 80 characters or fewer.")
+        return {
+            "latitude": round(latitude, 6),
+            "longitude": round(longitude, 6),
+            "label": label,
+            "source": "user_setting",
+        }
+
+    def _load(self) -> None:
+        if not self.path.exists():
+            return
+        try:
+            loaded = json.loads(self.path.read_text(encoding="utf-8"))
+            location = loaded.get("receiver_location")
+            if isinstance(location, dict):
+                self.data["receiver_location"] = self._validate_location(location)
+        except Exception as exc:
+            LOG.warning("Ignoring invalid settings file %s: %s", self.path, exc)
+
+    def receiver_location(self) -> dict[str, Any]:
+        with self.lock:
+            return dict(self.data["receiver_location"])
+
+    def update_receiver_location(self, payload: dict[str, Any]) -> dict[str, Any]:
+        location = self._validate_location(payload)
+        with self.lock:
+            self.data["receiver_location"] = location
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            temporary_path = self.path.with_suffix(self.path.suffix + ".tmp")
+            temporary_path.write_text(json.dumps(self.data, indent=2) + "\n", encoding="utf-8", newline="\n")
+            temporary_path.replace(self.path)
+        return dict(location)
+
+
 class DecoderManager:
     """Own the serial-role mapping and the child Dump1090 decoder process."""
 
-    def __init__(self, root: Path, dump_http_port: int) -> None:
+    def __init__(self, root: Path, dump_http_port: int, settings: SettingsStore) -> None:
         self.root = root
         self.dump_http_port = dump_http_port
+        self.settings = settings
         self.probe = root / "dist" / "native-windows" / "rtl_dual_device_probe.exe"
         self.dump1090 = root / "dist" / "third_party" / "dump1090" / "dump1090.exe"
         self.airport_db = root / "dist" / "third_party" / "dump1090" / "airport-codes.csv"
@@ -125,13 +183,14 @@ class DecoderManager:
     def write_config(self) -> None:
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
         airport_path = windows_path(self.airport_db)
+        location = self.settings.receiver_location()
         self.config.write_text(
             "\n".join(
                 [
                     "# Generated application runtime configuration; excluded from Git.",
                     "aircrafts = NUL",
                     f"airports = {airport_path}",
-                    "homepos = 38.7467,-105.1783",
+                    f"homepos = {location['latitude']:.6f},{location['longitude']:.6f}",
                     "location = no",
                     "logfile = NUL",
                     "silent = true",
@@ -255,7 +314,7 @@ class DecoderManager:
             "ok": True,
             "service": "RTL-Windows-ADS-B-Tracker",
             "receiver_roles": self.roles,
-            "receiver_location": RECEIVER_LOCATION,
+            "receiver_location": self.settings.receiver_location(),
             "decoder": decoder,
             "last_error": self.last_error,
         }
@@ -614,6 +673,21 @@ class ApiHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(content)
 
+    def read_json_body(self) -> dict[str, Any]:
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError as exc:
+            raise ValueError("Invalid request body length.") from exc
+        if length <= 0 or length > 4096:
+            raise ValueError("Request must contain a small JSON body.")
+        try:
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError("Request body must be valid JSON.") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("Request body must be a JSON object.")
+        return payload
+
     def do_OPTIONS(self) -> None:
         self.send_response(HTTPStatus.NO_CONTENT)
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -655,6 +729,8 @@ class ApiHandler(BaseHTTPRequestHandler):
                     self.send_file(self.audio.wav_path)
                 else:
                     self.send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "no_recording"})
+            elif route == "/api/settings":
+                self.send_json(HTTPStatus.OK, {"ok": True, "receiver_location": self.manager.settings.receiver_location()})
             elif route == "/api/audio/live/status":
                 self.send_json(HTTPStatus.OK, self.audio.live_status())
             elif route == "/api/audio/live/chunk.wav":
@@ -685,6 +761,13 @@ class ApiHandler(BaseHTTPRequestHandler):
             elif self.path == "/api/decoder/stop":
                 self.manager.stop()
                 self.send_json(HTTPStatus.OK, self.manager.status())
+            elif self.path == "/api/settings/receiver-location":
+                location = self.manager.settings.update_receiver_location(self.read_json_body())
+                self.send_json(HTTPStatus.OK, {
+                    "ok": True,
+                    "receiver_location": location,
+                    "decoder_restart_required": self.manager.is_running(),
+                })
             elif self.path == "/api/audio/noaa/start":
                 self.send_json(HTTPStatus.OK, self.audio.start_noaa())
             elif self.path == "/api/audio/noaa/live/start":
@@ -706,6 +789,7 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=8090)
     parser.add_argument("--dump-http-port", type=int, default=18080)
     parser.add_argument("--audio-record-seconds", type=int, default=30)
+    parser.add_argument("--settings-file", help="Override the application settings JSON path for testing.")
     parser.add_argument("--autostart", action="store_true", help="Start ADS-B decoder on backend startup.")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
@@ -716,7 +800,9 @@ def main() -> int:
     )
 
     root = Path(__file__).resolve().parents[2]
-    manager = DecoderManager(root, args.dump_http_port)
+    settings_path = Path(args.settings_file) if args.settings_file else root / "runtime" / "settings" / "application_settings.json"
+    settings = SettingsStore(settings_path)
+    manager = DecoderManager(root, args.dump_http_port, settings)
     audio_manager = AudioManager(manager, args.audio_record_seconds)
     server = ThreadingHTTPServer((args.host, args.port), ApiHandler)
     server.manager = manager  # type: ignore[attr-defined]

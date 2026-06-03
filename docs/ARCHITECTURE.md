@@ -77,3 +77,7 @@ The backend owns a second audio operation manager for the NOAA/Airband receiver.
 ## Live NOAA audio delivery
 
 Live NOAA listening uses the cached audio-role index for serial `00000162`. The backend launches `rtl_fm` with stdout PCM output, packages sequential 500 ms PCM blocks as small WAV responses, and lets the browser queue them through the Web Audio API. Live listening and bounded record/play are mutually exclusive operations on the same audio receiver.
+
+## Persisted receiver location
+
+The backend owns validated receiver-location settings stored in excluded runtime settings JSON. `/api/status` and `/api/settings` expose the saved location to the browser map; decoder configuration applies that location at decoder startup. This setting is the spatial reference for future airband-channel distance sorting and receiver coverage features.

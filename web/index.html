@@ -29,6 +29,18 @@
         <div><dt>Profile</dt><dd id="profile">—</dd></div>
         <div><dt>Receiver</dt><dd id="receiver-label">—</dd></div>
       </dl>
+      <details class="location-settings">
+        <summary>Set receiver location</summary>
+        <div class="location-grid">
+          <label>Label<input id="location-label" maxlength="80" type="text"></label>
+          <label>Latitude<input id="location-latitude" step="0.000001" type="number" min="-90" max="90"></label>
+          <label>Longitude<input id="location-longitude" step="0.000001" type="number" min="-180" max="180"></label>
+        </div>
+        <div class="location-actions">
+          <button id="save-location" type="button">Save Location</button>
+          <span id="location-result" class="quiet"></span>
+        </div>
+      </details>
     </section>
     <section class="panel audio-panel">
       <div class="panel-title"><h2>NOAA Weather Radio</h2><span id="audio-state" class="badge">Idle</span></div>

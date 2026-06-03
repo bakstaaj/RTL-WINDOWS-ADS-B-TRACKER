@@ -113,3 +113,7 @@ The initial UI provides a bounded Record NOAA / playback workflow. See `docs/NOA
 ## Live NOAA listening baseline
 
 The NOAA/Airband receiver now also supports local browser live listening through rolling backend WAV segments while preserving the bounded recording workflow. Use **Listen Live** in the browser interface. See `docs/NOAA_LIVE_AUDIO.md`.
+
+## Receiver location settings
+
+The browser Receiver Status panel now supports a persisted receiver label, latitude and longitude. The backend stores operational settings outside tracked source, and the saved location provides the reference point for upcoming distance-ranked airband channel support. See `docs/RECEIVER_LOCATION.md`.
