@@ -105,3 +105,11 @@ Ranked browser-side Survey Scan results retain their underlying FAA catalog reco
 ## Operator-triggered bounded Airband Capture
 
 The browser reuses the existing FAA-validated live AM segment endpoint to receive a fixed 10-second selected-channel sample without speaker playback, merges decoded mono audio into a client-side WAV download, and labels it from the FAA result record. No new backend tuner mode or automatic detector/hold state is introduced.
+
+## Candidate-level survey review
+
+The browser can compute the median RMS of a completed bounded survey and apply an operator-selected relative level multiplier to label above-level candidates. This is presentation and review logic only: it does not change backend tuning, infer speech, or introduce an autonomous hold/play state.
+
+## Feature-branch validation and publication
+
+Application milestones are built on isolated feature branches from synchronized `main`, receive lightweight source checks plus one meaningful live validation, then are committed and fast-forwarded to `main` for publication. Failed work remains isolated from published source until repaired or discarded.

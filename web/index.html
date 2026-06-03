@@ -76,12 +76,20 @@
             <option value="control">Tower / Ground / Approach</option>
           </select>
         </label>
+        <label>Candidate level
+          <select id="survey-candidate-threshold">
+            <option value="off">Off</option>
+            <option value="1.25" selected>1.25 × median</option>
+            <option value="1.5">1.50 × median</option>
+            <option value="2">2.00 × median</option>
+          </select>
+        </label>
       </div>
       <div class="airband-scan-actions">
         <button id="run-airband-survey" type="button">Run Survey Scan</button>
         <button id="stop-airband-survey" type="button" class="secondary" disabled>Stop Scan</button>
       </div>
-      <div id="airband-survey-note" class="airband-survey-note">Survey Scan ranks measured AM audio level only; it does not identify active voice traffic. Use Listen or Capture 10s on a completed result for manual review.</div>
+      <div id="airband-survey-note" class="airband-survey-note">Survey Scan ranks measured AM audio level only; candidate highlighting means above a selected level rule, not confirmed voice traffic. Use Listen or Capture 10s for manual review.</div>
       <div id="airband-summary" class="airband-summary">Loading FAA frequency catalog…</div>
       <div id="airband-survey-results" class="airband-survey-results"></div>
       <div class="airband-table-wrap">

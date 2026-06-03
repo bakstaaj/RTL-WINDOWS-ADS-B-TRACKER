@@ -141,3 +141,11 @@ Completed Survey Scan result rows include a manual **Listen** action, allowing a
 ## Bounded Airband Capture review
 
 Nearby FAA channels and completed Survey Scan results can be captured manually to a labeled 10-second WAV download through the existing validated AM transport. This supplies review material for later detector design while retaining an operator-triggered, no-auto-hold boundary. See `docs/AIRBAND_CAPTURE_REVIEW.md`.
+
+## Development workflow
+
+New milestones use isolated feature branches, lightweight source checks and one meaningful live hardware/API validation before a validated commit is fast-forwarded to `main` and published. Failed work remains off `main` for targeted repair or rollback. See `docs/DEVELOPMENT_WORKFLOW.md`.
+
+## Candidate-level airband review
+
+Survey Scan supports an operator-selected measured-level rule that marks above-level candidates relative to the survey median. Candidate status is measurement-only and requires manual Listen or Capture review; it does not declare traffic or automatically hold/play a channel. See `docs/AIRBAND_CANDIDATE_LEVEL_REVIEW.md`.
