@@ -73,3 +73,7 @@ The initial browser UI is served directly by the Python backend and consumes `/a
 ## NOAA audio operation baseline
 
 The backend owns a second audio operation manager for the NOAA/Airband receiver. Initial NOAA operation is a bounded NFM recording at 162.500 MHz that produces a WAV file served to the browser for playback. It uses the cached numeric index for serial `00000162` from the same pre-decoder role mapping that assigns ADS-B serial `00001090`; it does not enumerate serial roles concurrently with active ADS-B decoding.
+
+## Live NOAA audio delivery
+
+Live NOAA listening uses the cached audio-role index for serial `00000162`. The backend launches `rtl_fm` with stdout PCM output, packages sequential 500 ms PCM blocks as small WAV responses, and lets the browser queue them through the Web Audio API. Live listening and bounded record/play are mutually exclusive operations on the same audio receiver.

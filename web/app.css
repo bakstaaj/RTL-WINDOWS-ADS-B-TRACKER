@@ -14,3 +14,5 @@ footer{padding:7px 16px;border-top:1px solid var(--line);color:var(--muted);font
 @media(max-width:960px){.layout{display:flex;flex-direction:column}.map-shell{height:58vh;flex:none}}
 
 .audio-panel{min-height:170px}.audio-channel{margin:10px 0;color:var(--muted);font-size:13px}.audio-actions{display:flex;margin:8px 0 11px}.audio-actions button:first-child{margin-left:0}.audio-progress{font-size:12px;color:var(--muted);min-height:18px;margin-bottom:8px}audio{height:34px;width:100%;display:none}audio.ready{display:block}
+
+.audio-live-note{font-size:11px;color:var(--muted);margin-top:8px}

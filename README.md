@@ -109,3 +109,7 @@ Then browse to `http://127.0.0.1:8090/`. The UI displays live markers and browse
 The second RTL-SDR receiver supports backend-managed NOAA recording. Serial `00000162` records the validated local channel at `162.500 MHz` using NFM, 24 kHz output, 40.2 dB gain and de-emphasis while ADS-B continues on serial `00001090`.
 
 The initial UI provides a bounded Record NOAA / playback workflow. See `docs/NOAA_AUDIO.md`.
+
+## Live NOAA listening baseline
+
+The NOAA/Airband receiver now also supports local browser live listening through rolling backend WAV segments while preserving the bounded recording workflow. Use **Listen Live** in the browser interface. See `docs/NOAA_LIVE_AUDIO.md`.

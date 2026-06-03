@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from array import array
 import argparse
+import io
 import json
 import logging
 import mimetypes
@@ -31,7 +32,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.error import URLError
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 from urllib.request import urlopen
 
 LOG = logging.getLogger("rtl_windows_backend")
@@ -280,6 +281,16 @@ class AudioManager:
         self.completed_at: float | None = None
         self.metrics: dict[str, Any] | None = None
         self.last_error: str | None = None
+        self.live_process: subprocess.Popen[bytes] | None = None
+        self.live_log_handle: Any = None
+        self.live_thread: threading.Thread | None = None
+        self.live_stop_event = threading.Event()
+        self.live_chunks: list[tuple[int, bytes]] = []
+        self.live_sequence = 0
+        self.live_started_at: float | None = None
+        self.live_error: str | None = None
+        self.live_chunk_seconds = 0.5
+        self.live_max_chunks = 24
 
     def audio_index(self) -> int:
         if self.decoder.roles is None:
@@ -312,7 +323,140 @@ class AudioManager:
             "last_error": self.last_error,
         }
 
+    def live_is_running(self) -> bool:
+        return self.live_process is not None and self.live_process.poll() is None
+
+    def live_status(self) -> dict[str, Any]:
+        with self.lock:
+            return {
+                "ok": True,
+                "mode": "noaa_live",
+                "running": self.live_is_running(),
+                "profile": NOAA_PROFILE,
+                "audio_role": self.decoder.roles.get("audio") if self.decoder.roles else None,
+                "chunk_seconds": self.live_chunk_seconds,
+                "latest_sequence": self.live_sequence,
+                "available_chunks": len(self.live_chunks),
+                "started_at": self.live_started_at,
+                "last_error": self.live_error,
+            }
+
+    def start_live(self) -> dict[str, Any]:
+        with self.lock:
+            if self.is_running():
+                raise RuntimeError("Stop the NOAA recording before starting live listening.")
+            if self.live_is_running():
+                return self.live_status()
+            rtl_fm = shutil.which("rtl_fm")
+            if not rtl_fm:
+                raise RuntimeError("rtl_fm is not available in PATH.")
+            index = self.audio_index()
+            self.runtime_dir.mkdir(parents=True, exist_ok=True)
+            live_log_path = self.runtime_dir / "latest_noaa_live_rtl_fm.log"
+            live_log_path.unlink(missing_ok=True)
+            command = [
+                windows_path(Path(rtl_fm)),
+                "-d", str(index),
+                "-f", str(NOAA_PROFILE["frequency_hz"]),
+                "-M", "fm",
+                "-s", str(NOAA_PROFILE["sample_rate_hz"]),
+                "-r", str(NOAA_PROFILE["sample_rate_hz"]),
+                "-g", str(NOAA_PROFILE["gain_db"]),
+                "-l", "0",
+                "-E", "deemp",
+            ]
+            self.live_log_handle = live_log_path.open("wb")
+            self.live_chunks = []
+            self.live_sequence = 0
+            self.live_error = None
+            self.live_stop_event.clear()
+            LOG.info("Starting live NOAA listening for audio serial %s at cached index %s", AUDIO_SERIAL, index)
+            self.live_process = subprocess.Popen(
+                command,
+                cwd=windows_path(self.runtime_dir),
+                stdout=subprocess.PIPE,
+                stderr=self.live_log_handle,
+                text=False,
+            )
+            self.live_started_at = time.time()
+            self.live_thread = threading.Thread(target=self._pump_live_pcm, daemon=True)
+            self.live_thread.start()
+            return self.live_status()
+
+    def _pump_live_pcm(self) -> None:
+        rate = int(NOAA_PROFILE["sample_rate_hz"])
+        block_bytes = int(rate * 2 * self.live_chunk_seconds)
+        with self.lock:
+            process = self.live_process
+        if process is None or process.stdout is None:
+            return
+        try:
+            while not self.live_stop_event.is_set():
+                pcm = process.stdout.read(block_bytes)
+                if not pcm:
+                    break
+                if len(pcm) % 2:
+                    pcm = pcm[:-1]
+                with self.lock:
+                    self.live_sequence += 1
+                    self.live_chunks.append((self.live_sequence, pcm))
+                    self.live_chunks = self.live_chunks[-self.live_max_chunks:]
+        except Exception as exc:
+            with self.lock:
+                self.live_error = str(exc)
+            LOG.exception("Live NOAA PCM pump failed")
+        finally:
+            with self.lock:
+                if not self.live_stop_event.is_set() and process.poll() is not None:
+                    self.live_error = self.live_error or f"rtl_fm exited with code {process.returncode}"
+
+    def _wav_bytes(self, pcm: bytes) -> bytes:
+        output = io.BytesIO()
+        with wave.open(output, "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(int(NOAA_PROFILE["sample_rate_hz"]))
+            wav_file.writeframes(pcm)
+        return output.getvalue()
+
+    def next_live_wav(self, after_sequence: int, timeout_seconds: float = 2.5) -> tuple[int, bytes] | None:
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            with self.lock:
+                for sequence, pcm in self.live_chunks:
+                    if sequence > after_sequence:
+                        return sequence, self._wav_bytes(pcm)
+                running = self.live_is_running()
+            if not running:
+                return None
+            time.sleep(0.05)
+        return None
+
+    def stop_live(self) -> dict[str, Any]:
+        with self.lock:
+            self.live_stop_event.set()
+            process = self.live_process
+            thread = self.live_thread
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=3)
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=2)
+        with self.lock:
+            if self.live_log_handle is not None:
+                self.live_log_handle.close()
+                self.live_log_handle = None
+            self.live_process = None
+            self.live_thread = None
+        return self.live_status()
+
     def start_noaa(self) -> dict[str, Any]:
+        if self.live_is_running():
+            raise RuntimeError("Stop live listening before starting a NOAA recording.")
         with self.lock:
             if self.is_running():
                 return self.status()
@@ -390,6 +534,7 @@ class AudioManager:
                 LOG.exception("Unable to finalize NOAA recording")
 
     def stop(self) -> dict[str, Any]:
+        self.stop_live()
         with self.lock:
             token = self.active_token
         if token is not None:
@@ -455,10 +600,17 @@ class ApiHandler(BaseHTTPRequestHandler):
             return
         content = path.read_bytes()
         mime_type, _ = mimetypes.guess_type(str(path))
-        self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", mime_type or "application/octet-stream")
+        self.send_binary(HTTPStatus.OK, content, mime_type or "application/octet-stream")
+
+    def send_binary(self, code: int, content: bytes, content_type: str, extra_headers: dict[str, str] | None = None) -> None:
+        self.send_response(code)
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(content)))
-        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Cache-Control", "no-store")
+        if extra_headers:
+            for name, value in extra_headers.items():
+                self.send_header(name, value)
         self.end_headers()
         self.wfile.write(content)
 
@@ -471,7 +623,8 @@ class ApiHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         try:
-            route = urlparse(self.path).path
+            parsed_url = urlparse(self.path)
+            route = parsed_url.path
             if route == "/":
                 self.send_file(self.manager.root / "web" / "index.html")
             elif route.startswith("/static/"):
@@ -502,6 +655,23 @@ class ApiHandler(BaseHTTPRequestHandler):
                     self.send_file(self.audio.wav_path)
                 else:
                     self.send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "no_recording"})
+            elif route == "/api/audio/live/status":
+                self.send_json(HTTPStatus.OK, self.audio.live_status())
+            elif route == "/api/audio/live/chunk.wav":
+                query = parse_qs(parsed_url.query)
+                try:
+                    after_sequence = int(query.get("after", ["0"])[0])
+                except ValueError:
+                    self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "invalid_after_sequence"})
+                    return
+                next_chunk = self.audio.next_live_wav(after_sequence)
+                if next_chunk is None:
+                    self.send_response(HTTPStatus.NO_CONTENT)
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                else:
+                    sequence, wav_content = next_chunk
+                    self.send_binary(HTTPStatus.OK, wav_content, "audio/wav", {"X-Audio-Sequence": str(sequence)})
             else:
                 self.send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not_found"})
         except Exception as exc:
@@ -517,6 +687,10 @@ class ApiHandler(BaseHTTPRequestHandler):
                 self.send_json(HTTPStatus.OK, self.manager.status())
             elif self.path == "/api/audio/noaa/start":
                 self.send_json(HTTPStatus.OK, self.audio.start_noaa())
+            elif self.path == "/api/audio/noaa/live/start":
+                self.send_json(HTTPStatus.OK, self.audio.start_live())
+            elif self.path == "/api/audio/live/stop":
+                self.send_json(HTTPStatus.OK, self.audio.stop_live())
             elif self.path == "/api/audio/stop":
                 self.send_json(HTTPStatus.OK, self.audio.stop())
             else:
