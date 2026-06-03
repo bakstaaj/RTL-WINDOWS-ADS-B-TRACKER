@@ -43,3 +43,7 @@ Application start
 5. NOAA NFM audio receiver.
 6. Backend/API and map-first browser interface.
 7. Airband AM scanning and state coordination.
+
+## Native device-role manager baseline
+
+The first native executable, `rtl_dual_device_probe`, uses `librtlsdr` to enumerate both dongles sequentially and assigns roles by EEPROM serial number before opening any handles. Its `--open-test` operation opens both receivers by their resolved session indexes and reads a sample block from each. This behavior is the baseline for the later backend-managed ADS-B and audio workers.

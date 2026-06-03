@@ -40,3 +40,15 @@ git status --short
 ```
 
 The Docker step is used for reproducible Windows-x64 builds. Live RTL-SDR device testing remains native on Windows.
+
+## Native device-role probe
+
+The first native Windows component resolves the two RTL-SDR roles sequentially by EEPROM serial number and can open/read both receiver handles in a single process:
+
+```bash
+cd ~/sdrdev/RTL-Windows-ADS-B-Tracker
+./tools/build_native_device_probe.sh
+./tools/test_native_device_probe.sh
+```
+
+This implements the verified startup rule needed to avoid concurrent serial-discovery conflicts on the dual RTL-SDR Windows host.
