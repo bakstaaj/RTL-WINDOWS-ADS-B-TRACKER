@@ -11,6 +11,8 @@ REPORT="${OUT}/RTL-Windows-ADS-B-Tracker_Backend_API_Test.txt"
 LOG="${OUT}/RTL-Windows-ADS-B-Tracker_Backend_API_Test.log"
 STATUS_JSON="${OUT}/RTL-Windows-ADS-B-Tracker_Backend_status.json"
 AIRCRAFT_JSON="${OUT}/RTL-Windows-ADS-B-Tracker_Backend_aircraft.json"
+UI_HTML="${OUT}/RTL-Windows-ADS-B-Tracker_Backend_UI_index.html"
+UI_JS="${OUT}/RTL-Windows-ADS-B-Tracker_Backend_UI_app.js"
 API_PORT=18090
 DUMP_PORT=18180
 OBSERVE_SECONDS=35
@@ -40,7 +42,7 @@ for command_name in python3 curl; do
 done
 
 mkdir -p "${OUT}"
-rm -f "${REPORT}" "${LOG}" "${STATUS_JSON}" "${AIRCRAFT_JSON}"
+rm -f "${REPORT}" "${LOG}" "${STATUS_JSON}" "${AIRCRAFT_JSON}" "${UI_HTML}" "${UI_JS}"
 exec > >(tee "${REPORT}") 2>&1
 
 printf 'RTL-Windows-ADS-B-Tracker backend API test - %s\n' "$(date -Is 2>/dev/null || date)"
@@ -81,6 +83,13 @@ assert data["decoder"]["json_ready"] is True
 print("PASS: backend status reports stable receiver roles and a running JSON-ready decoder.")
 print("Initial status:", json.dumps(data, indent=2))
 PY
+
+curl -fsS "http://127.0.0.1:${API_PORT}/" >"${UI_HTML}"
+curl -fsS "http://127.0.0.1:${API_PORT}/static/app.js" >"${UI_JS}"
+grep -q 'id="map"' "${UI_HTML}" || fail "Served UI page does not contain the map container."
+grep -q '/api/aircraft' "${UI_JS}" || fail "Served UI JavaScript does not consume the application aircraft API."
+grep -q 'function color' "${UI_JS}" || fail "Served UI JavaScript does not include altitude trail styling."
+printf 'PASS: Backend serves live map assets that consume application API endpoints.\n'
 
 MAX_MESSAGES=0
 MAX_AIRCRAFT=0

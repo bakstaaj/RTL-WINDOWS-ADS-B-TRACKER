@@ -92,3 +92,14 @@ http://127.0.0.1:8090
 ```
 
 See `docs/BACKEND_API.md` for endpoints and validation instructions.
+
+## Live map UI baseline
+
+The application backend now serves the initial browser map interface:
+
+```bash
+cd ~/sdrdev/RTL-Windows-ADS-B-Tracker
+./tools/run_backend_dev.sh
+```
+
+Then browse to `http://127.0.0.1:8090/`. The UI displays live markers and browser-session trails using application API endpoints rather than directly coupling the browser to Dump1090. See `docs/WEB_MAP_UI.md`.

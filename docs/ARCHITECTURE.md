@@ -65,3 +65,7 @@ Dump1090 exposes live state through `/data/aircraft.json`, which is the initial 
 The first application backend is implemented using the Python standard library and owns Dump1090 lifecycle control. The future browser UI communicates only with backend API endpoints such as `/api/status` and `/api/aircraft`; Dump1090 remains an internal decoder service.
 
 This separation allows later NOAA/Airband controls, map state, settings persistence and trail history to be added without coupling UI code directly to third-party decoder process behavior.
+
+## Live map browser interface
+
+The initial browser UI is served directly by the Python backend and consumes `/api/status` and `/api/aircraft`. It includes receiver rings, oriented aircraft markers, a selected-aircraft detail view and browser-session trails. Keeping Dump1090 internal preserves the application API boundary for later audio controls, persisted settings and history restoration.

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>RTL Windows ADS-B Tracker</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="header">
+  <div><p class="overline">RTL-SDR / Windows 11</p><h1>ADS-B Tracker</h1></div>
+  <div class="connection"><span id="decoder-pill" class="pill pending">Connecting</span><span id="last-update">Waiting for status</span></div>
+</header>
+<main class="layout">
+  <section class="map-shell">
+    <div id="map" aria-label="Aircraft tracking map"></div>
+    <div class="map-help">Click a positioned aircraft for details and trail.</div>
+  </section>
+  <aside class="sidebar">
+    <section class="panel">
+      <div class="panel-title"><h2>Receiver Status</h2><div><button id="start-decoder">Start</button><button id="stop-decoder" class="secondary">Stop</button></div></div>
+      <dl class="metrics">
+        <div><dt>Messages</dt><dd id="messages">—</dd></div>
+        <div><dt>Aircraft</dt><dd id="aircraft-count">—</dd></div>
+        <div><dt>ADS-B SDR</dt><dd id="adsb-role">—</dd></div>
+        <div><dt>Audio SDR</dt><dd id="audio-role">—</dd></div>
+        <div><dt>Profile</dt><dd id="profile">—</dd></div>
+        <div><dt>Receiver</dt><dd id="receiver-label">—</dd></div>
+      </dl>
+    </section>
+    <section class="panel">
+      <h2>Selected Aircraft</h2>
+      <div id="selected-details" class="placeholder">Select an aircraft marker or table row.</div>
+    </section>
+    <section class="panel table-panel">
+      <div class="panel-title"><h2>Positioned Aircraft</h2><span id="position-count" class="badge">0</span></div>
+      <div class="table-wrap">
+        <table><thead><tr><th>Flight / Hex</th><th>Alt ft</th><th>Speed</th><th>Seen</th></tr></thead>
+        <tbody id="aircraft-rows"><tr><td class="empty-row" colspan="4">Waiting for positions…</td></tr></tbody></table>
+      </div>
+    </section>
+  </aside>
+</main>
+<footer>Local development interface. Map tile attribution is shown in-map.</footer>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

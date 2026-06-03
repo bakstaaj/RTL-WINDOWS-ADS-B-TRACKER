@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import mimetypes
 import shutil
 import signal
 import subprocess
@@ -26,11 +27,18 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.error import URLError
+from urllib.parse import urlparse
 from urllib.request import urlopen
 
 LOG = logging.getLogger("rtl_windows_backend")
 ADSB_SERIAL = "00001090"
 AUDIO_SERIAL = "00000162"
+RECEIVER_LOCATION = {
+    "latitude": 38.7467,
+    "longitude": -105.1783,
+    "label": "Cripple Creek receiver",
+    "source": "initial_development_default",
+}
 
 
 def windows_path(path: Path) -> str:
@@ -228,6 +236,7 @@ class DecoderManager:
             "ok": True,
             "service": "RTL-Windows-ADS-B-Tracker",
             "receiver_roles": self.roles,
+            "receiver_location": RECEIVER_LOCATION,
             "decoder": decoder,
             "last_error": self.last_error,
         }
@@ -253,6 +262,19 @@ class ApiHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def send_file(self, path: Path) -> None:
+        if not path.is_file():
+            self.send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not_found"})
+            return
+        content = path.read_bytes()
+        mime_type, _ = mimetypes.guess_type(str(path))
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", mime_type or "application/octet-stream")
+        self.send_header("Content-Length", str(len(content)))
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.wfile.write(content)
+
     def do_OPTIONS(self) -> None:
         self.send_response(HTTPStatus.NO_CONTENT)
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -262,15 +284,26 @@ class ApiHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         try:
-            if self.path in ("/", "/health"):
+            route = urlparse(self.path).path
+            if route == "/":
+                self.send_file(self.manager.root / "web" / "index.html")
+            elif route.startswith("/static/"):
+                static_root = (self.manager.root / "web").resolve()
+                relative = route.removeprefix("/static/")
+                asset = (static_root / relative).resolve()
+                if asset != static_root and static_root not in asset.parents:
+                    self.send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not_found"})
+                else:
+                    self.send_file(asset)
+            elif route == "/health":
                 self.send_json(HTTPStatus.OK, {"ok": True, "service": "RTL-Windows-ADS-B-Tracker"})
-            elif self.path == "/api/status":
+            elif route == "/api/status":
                 self.send_json(HTTPStatus.OK, self.manager.status())
-            elif self.path == "/api/receiver-roles":
+            elif route == "/api/receiver-roles":
                 if self.manager.roles is None:
                     self.manager.resolve_roles()
                 self.send_json(HTTPStatus.OK, self.manager.roles)
-            elif self.path == "/api/aircraft":
+            elif route == "/api/aircraft":
                 if not self.manager.is_running():
                     self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"ok": False, "error": "decoder_not_running"})
                 else:
