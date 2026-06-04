@@ -286,10 +286,29 @@ body { padding: 0; }
 .airband-tuning-controls { display: flex; align-items: end; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
 .airband-tuning-controls label { flex: 1 1 128px; }
 .airband-tuning-controls button { flex: 0 1 auto; }
+/* Step 56: fast spectrum Airband search */
+.airband-fast-search-controls { display: flex; align-items: end; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.airband-fast-search-controls label { flex: 1 1 145px; }
 
 /* Step 54: traditional Airband scanner controls using native page functions */
 #airbandSkipHeld:enabled { background: #246a9a; }
 #airbandBlockHeld:enabled { border-color: #ff8b7d; }
+
+/* Step 57: map scanner controls and Airband apply layout */
+.airband-apply-row { margin-top: 5px; }
+.airband-apply-row #saveAirbandTuning { min-width: 128px; }
+.map-scanner-actions { display: flex; align-items: center; gap: 4px; margin-top: 3px; font-size: 10px; color: var(--muted); }
+.map-scanner-actions button { padding: 3px 7px; min-height: 21px; font-size: 10px; line-height: 1.05; border-radius: 4px; }
+.map-scanner-actions span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+
+/* Step 58R: merged Fast NOAA and map scanner action layout */
+.airband-apply-row { margin-top: 5px; }
+.airband-apply-row #saveAirbandTuning { min-width: 142px; }
+.map-scanner-actions { display: flex; align-items: center; gap: 4px; margin-top: 3px; font-size: 10px; color: var(--muted); }
+.map-scanner-actions button { padding: 3px 7px; min-height: 21px; font-size: 10px; line-height: 1.05; border-radius: 4px; }
+.map-scanner-actions span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
 </style>
 </head>
 <body>
@@ -369,9 +388,27 @@ body { padding: 0; }
               <option value="49.6">49.6 dB</option>
             </select>
           </label>
-          <button id="saveAirbandTuning" type="button">Apply Airband Tuning</button>
+        </div>
+        <div class="menu-button-row airband-apply-row"><button id="saveAirbandTuning" type="button">Apply Airband Tuning</button></div>
+        <div class="airband-fast-search-controls">
+          <label>Scanner Search
+            <select id="airbandSearchMode">
+              <option value="traditional">Traditional Audio Samples</option>
+              <option value="fast_spectrum">Fast Spectrum Search — 120–130 MHz</option>
+            </select>
+          </label>
+          <label>Carrier Trigger
+            <select id="airbandSpectrumMargin">
+              <option value="4">Very High — +4 dB</option>
+              <option value="6">High — +6 dB</option>
+              <option value="8" selected>Normal — +8 dB</option>
+              <option value="12">Low — +12 dB</option>
+              <option value="16">Very Low — +16 dB</option>
+            </select>
+          </label>
         </div>
         <div id="airbandTuningMessage" class="message compact-message">Airband tuning settings loading…</div>
+        <div id="airbandFastMessage" class="message compact-message">Fast search sweeps 120–130 MHz for carriers, then validates AM audio before opening playback.</div>
         <div class="menu-button-row"><button id="clearAirbandBlocks" class="stop" type="button">Clear Blocked Frequencies</button></div>
         <div id="airbandBlockedMessage" class="message compact-message">No frequencies blocked.</div>
       </div>
@@ -420,7 +457,7 @@ body { padding: 0; }
           <button id="capture10" type="button">Capture 10 sec</button>
           <audio id="audioPlayer" controls preload="none"></audio>
           <div id="audioMessage" class="message compact-message">Ready for NOAA diagnostics.</div>
-          <div id="surveyResult" class="message compact-message">NOAA Start and Reset &amp; Rescan measure all seven channels before selecting the strongest current channel.</div>
+          <div id="surveyResult" class="message compact-message">NOAA Start and Reset &amp; Rescan use fast carrier search followed by brief clear-audio validation.</div>
         </div>
       </details>
 
@@ -467,7 +504,12 @@ body { padding: 0; }
 </nav>
 <main class="focus-layout">
   <section class="map-panel"><div class="map-toolbar"><button id="fitAircraftMap" type="button">Fit Aircraft</button><button id="centerReceiverMap" type="button">Center Receiver</button><button id="clearAircraftTrails" type="button">Clear Display</button><button id="loadPiTrails" type="button">Restore History</button><div id="mapMessage" class="message">Waiting for aircraft positions from readsb.</div>
-      </div><div id="aircraftMap"></div><div class="map-footer"><div class="trail-legend"><span><i class="legend-line" style="border-color:#39ff14"></i>&lt; 5,001 ft</span><span><i class="legend-line" style="border-color:#087830"></i>&lt; 10,001 ft</span><span><i class="legend-line" style="border-color:#39cfff"></i>&lt; 20,001 ft</span><span><i class="legend-line" style="border-color:#1851b5"></i>&lt; 30,001 ft</span><span><i class="legend-line" style="border-color:#d4a600"></i>&lt; 40,001 ft</span><span><i class="legend-line" style="border-color:#ff3030"></i>&gt; 40,000 ft</span></div><div class="map-footer-status"><div id="stationDetail">Loading NOAA receiver information…</div><div id="airbandTuningDetail">Airband Tuning: loading…</div></div></div></section>
+      </div><div id="aircraftMap"></div><div class="map-footer"><div class="trail-legend"><span><i class="legend-line" style="border-color:#39ff14"></i>&lt; 5,001 ft</span><span><i class="legend-line" style="border-color:#087830"></i>&lt; 10,001 ft</span><span><i class="legend-line" style="border-color:#39cfff"></i>&lt; 20,001 ft</span><span><i class="legend-line" style="border-color:#1851b5"></i>&lt; 30,001 ft</span><span><i class="legend-line" style="border-color:#d4a600"></i>&lt; 40,001 ft</span><span><i class="legend-line" style="border-color:#ff3030"></i>&gt; 40,000 ft</span></div><div class="map-footer-status"><div id="stationDetail">Loading NOAA receiver information…</div><div id="airbandTuningDetail">Airband Tuning: loading…</div>
+          <div id="mapAirbandScannerActions" class="map-scanner-actions">
+            <button id="mapAirbandSkipHeld" type="button" disabled>Skip</button>
+            <button id="mapAirbandBlockHeld" class="stop" type="button" disabled>Block</button>
+            <span id="mapAirbandActionState">Available while holding a signal</span>
+          </div></div></div></section>
   <section class="active-panel"><h2>Active Aircraft</h2><table><thead><tr><th>Flight / ICAO</th><th>Altitude</th><th>Speed</th><th>Seen</th></tr></thead><tbody id="aircraftRows"><tr><td colspan="4" class="empty">Loading aircraft data…</td></tr></tbody></table><div class="small">Click an aircraft on the map for details. Trails use altitude colors.</div></section>
 </main>
 
@@ -526,6 +568,9 @@ body { padding: 0; }
 let audioObjectUrl = null;
 let liveListening = false;
 let liveAudioContext = null;
+let noaaAudioPreparedForStart = false; /* Step 60: NOAA prepares browser audio before selection and owns receiver */
+let noaaAudioUsesAirbandContext = false; /* Step 65: NOAA browser playback context and reconnect support */
+let noaaPlaybackChunksScheduled = 0;
 let liveNextCursor = 0;
 let liveNextPlayTime = 0;
 let livePumpTimer = null;
@@ -1607,6 +1652,10 @@ async function captureNoaa() {
 async function pumpLiveAudio() {
   if (!liveListening || !liveAudioContext) return;
   try {
+    if (liveAudioContext.state !== 'running') await liveAudioContext.resume();
+    if (liveAudioContext.state !== 'running') {
+      throw new Error(`Browser audio context is ${liveAudioContext.state}; use Reconnect NOAA Audio.`);
+    }
     const response = await fetch(`/api/noaa/live/audio.wav?from=${liveNextCursor}&samples=12000&request=${Date.now()}`, {cache: 'no-store'});
     if (response.status === 204) {
       livePumpTimer = window.setTimeout(pumpLiveAudio, 120);
@@ -1623,13 +1672,20 @@ async function pumpLiveAudio() {
     source.start(startAt);
     liveNextPlayTime = startAt + decoded.duration;
     liveNextCursor += sourceSamples;
+    noaaPlaybackChunksScheduled += 1;
+    if (noaaPlaybackChunksScheduled === 1) {
+      const output = noaaAudioUsesAirbandContext ? 'shared scanner audio output' : 'NOAA audio output';
+      setMessage('audioMessage', `NOAA live audio playing through ${output}.`, 'good');
+    }
     const bufferedSeconds = liveNextPlayTime - liveAudioContext.currentTime;
     livePumpTimer = window.setTimeout(pumpLiveAudio, bufferedSeconds > 1.4 ? 250 : 20);
   } catch (error) {
-    setMessage('audioMessage', `Live audio failed: ${error.message}`, 'error');
-    await stopLive();
+    liveListening = false;
+    setMessage('audioMessage', `NOAA browser playback failed: ${error.message}. Click Reconnect NOAA Audio.`, 'error');
+    await refreshOperationMenu();
   }
 }
+
 
 async function prepareAirbandAudio() {
   if (!airbandAudioContext) airbandAudioContext = new (window.AudioContext || window.webkitAudioContext)();
@@ -1738,19 +1794,20 @@ async function rescanSavedNoaaChannel() {
   closeMenu();
 
   try {
+    await prepareNoaaAudioForStart();
     const status = await jsonRequest('/api/status');
     const airband = await readAirbandStatus();
 
     await showBusyAndPaint(
       'Rescanning NOAA Weather channels…',
-      'Clearing the saved local channel and surveying all NOAA frequencies.'
+      'Clearing the saved local channel and running one fast spectrum search across all seven NOAA frequencies.'
     );
 
     if (status.live_audio_running || liveListening) {
-      await stopLive();
+      await stopLive(true);
     }
     if (airband.airband_scan_running) {
-      const released = await stopAirbandBackground(false, false);
+      const released = await stopAirbandBackground(true, false);
       if (!released) throw new Error('Airband did not release the shared receiver.');
     }
 
@@ -1760,8 +1817,10 @@ async function rescanSavedNoaaChannel() {
   } catch (error) {
     hideBusy();
     airbandRestartSuspended = false;
-    setMessage('locationMessage', `NOAA rescan failed: ${error.message}`, 'error');
-    if (airbandBackgroundWanted && !liveListening) await startAirbandBackground(true);
+    airbandBackgroundWanted = false;
+    airbandPausedForNoaa = false;
+    await releaseUnusedPreparedNoaaAudio();
+    setMessage('locationMessage', `NOAA rescan failed: ${error.message}. Airband remains stopped.`, 'error');
   } finally {
     operationTransitionActive = false;
     setOperationButtonsDisabled(false);
@@ -1769,56 +1828,119 @@ async function rescanSavedNoaaChannel() {
   }
 }
 
+async function prepareNoaaAudioForStart() {
+  // Step 65: NOAA browser playback context and reconnect support.
+  // Prefer the context already proven audible by Airband in this browser tab.
+  if (!liveAudioContext || liveAudioContext.state === 'closed') {
+    if (airbandAudioContext && airbandAudioContext.state !== 'closed') {
+      liveAudioContext = airbandAudioContext;
+      noaaAudioUsesAirbandContext = true;
+    } else {
+      liveAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+      noaaAudioUsesAirbandContext = false;
+    }
+  }
+  await liveAudioContext.resume();
+  if (liveAudioContext.state !== 'running') {
+    throw new Error(`Browser audio output is ${liveAudioContext.state}. Click Reconnect NOAA Audio.`);
+  }
+  const primer = liveAudioContext.createBuffer(1, 1, liveAudioContext.sampleRate);
+  const primerSource = liveAudioContext.createBufferSource();
+  primerSource.buffer = primer;
+  primerSource.connect(liveAudioContext.destination);
+  primerSource.start();
+  noaaAudioPreparedForStart = true;
+}
+async function releaseUnusedPreparedNoaaAudio() {
+  if (!liveListening && liveAudioContext && !noaaAudioUsesAirbandContext) {
+    try { await liveAudioContext.close(); } catch (_) {}
+  }
+  if (!liveListening) {
+    liveAudioContext = null;
+    noaaAudioUsesAirbandContext = false;
+  }
+  noaaAudioPreparedForStart = false;
+}
+
 async function startLive() {
   try {
+    await prepareNoaaAudioForStart();
     await jsonRequest('/api/noaa/live/start', {method: 'POST'});
-    liveAudioContext = new (window.AudioContext || window.webkitAudioContext)();
-    await liveAudioContext.resume();
     liveListening = true;
+    noaaAudioPreparedForStart = false;
+    noaaPlaybackChunksScheduled = 0;
     liveNextCursor = 0;
     liveNextPlayTime = liveAudioContext.currentTime + 0.20;
     setMessage('audioMessage', 'Live NOAA listening active. ADS-B continues.', 'good');
     await updateStatus();
     pumpLiveAudio();
   } catch (error) {
+    await releaseUnusedPreparedNoaaAudio();
     setMessage('audioMessage', `Unable to start NOAA: ${error.message}`, 'error');
   }
 }
 
-async function stopLive() {
+async function stopLive(preserveAudioContext = false) {
   liveListening = false;
+  noaaPlaybackChunksScheduled = 0;
   if (livePumpTimer) window.clearTimeout(livePumpTimer);
   try { await jsonRequest('/api/noaa/live/stop', {method: 'POST'}); } catch (_) {}
-  if (liveAudioContext) {
+  if (liveAudioContext && !preserveAudioContext && !noaaAudioUsesAirbandContext) {
     await liveAudioContext.close();
+  }
+  if (!preserveAudioContext) {
     liveAudioContext = null;
+    noaaAudioUsesAirbandContext = false;
+    noaaAudioPreparedForStart = false;
   }
   setMessage('audioMessage', 'NOAA listening stopped.', '');
   await updateStatus();
 }
 
+async function attachExistingNoaaLive(status) {
+  await prepareNoaaAudioForStart();
+  liveListening = true;
+  noaaAudioPreparedForStart = false;
+  noaaPlaybackChunksScheduled = 0;
+  liveNextCursor = 0;
+  liveNextPlayTime = liveAudioContext.currentTime + 0.08;
+  const selected = (Number(status.noaa_frequency_hz) / 1000000).toFixed(3);
+  setMessage('audioMessage', `Reconnecting browser audio to NOAA ${selected} MHz…`, 'warning');
+  pumpLiveAudio();
+}
+
 async function autoNoaa(forceRescan = false) {
+  await prepareNoaaAudioForStart();
   const noaaEndpoint = forceRescan ? '/api/noaa/auto/rescan' : '/api/noaa/auto/start';
   setMessage(
     'surveyResult',
-    forceRescan ? 'Rescanning all seven NOAA channels…' : 'Starting saved local NOAA channel, or surveying if none is saved…',
+    forceRescan ? 'Fast scanning all seven NOAA channels for the strongest carrier…' : 'Fast scanning all seven NOAA channels before starting audio…',
     'warning'
   );
 
   try {
     const status = await jsonRequest(noaaEndpoint, {method: 'POST'});
-    liveAudioContext = new (window.AudioContext || window.webkitAudioContext)();
-    await liveAudioContext.resume();
     liveListening = true;
+    noaaAudioPreparedForStart = false;
+    noaaPlaybackChunksScheduled = 0;
     liveNextCursor = 0;
     liveNextPlayTime = liveAudioContext.currentTime + 0.20;
     const selected = (Number(status.noaa_frequency_hz) / 1000000).toFixed(3);
-    setMessage('surveyResult', `Selected ${selected} MHz and started live listening.`, 'good');
+
+
+    const carrierEvidence = status.survey && status.survey.selected_carrier_margin_db != null
+      ? ` · carrier +${Number(status.survey.selected_carrier_margin_db).toFixed(1)} dB`
+      : '';
+    const audioEvidence = status.survey && status.survey.selected_audio_quality_db != null
+      ? ` · audio quality ${Number(status.survey.selected_audio_quality_db).toFixed(1)} dB`
+      : '';
+    setMessage('surveyResult', `Selected ${selected} MHz${carrierEvidence}${audioEvidence} and started live listening.`, 'good');
     setMessage('audioMessage', `NOAA listening active on ${selected} MHz.`, 'good');
     pumpLiveAudio();
     await updateStatus();
     return status;
   } catch (error) {
+    await releaseUnusedPreparedNoaaAudio();
     setMessage('surveyResult', `NOAA start failed: ${error.message}`, 'error');
     throw error;
   }
@@ -1917,6 +2039,18 @@ async function pollExperimentalScan() {
         'airbandScanStatus',
         `HOLD ${Number(held.frequency_mhz).toFixed(3)} MHz AM; live audio active; RMS ${Number(status.airband_hold_rms_sample || 0).toFixed(1)}; quiet ${Number(status.airband_hold_quiet_seconds || 0).toFixed(1)}/7.0 sec.`,
         'good'
+      );
+    } else if (status.airband_search_mode === 'fast_spectrum') {
+      const bestCarrier = status.airband_spectrum_best_frequency_hz == null
+        ? '—'
+        : `${(Number(status.airband_spectrum_best_frequency_hz) / 1000000).toFixed(3)} MHz`;
+      setMessage(
+        'airbandScanStatus',
+        `FAST 120–130 MHz: sweeps ${status.airband_spectrum_sweeps || 0}; ` +
+        `carrier candidates ${status.airband_spectrum_candidate_count || 0}; ` +
+        `best ${bestCarrier} / +${status.airband_spectrum_best_margin_db == null ? '—' : Number(status.airband_spectrum_best_margin_db).toFixed(1)} dB; ` +
+        `AM validations ${status.airband_spectrum_validation_count || 0}.`,
+        'warning'
       );
     } else {
       setMessage(
@@ -2118,21 +2252,28 @@ async function refreshOperationMenu() {
   try {
     const status = await jsonRequest('/api/status');
     const airband = await readAirbandStatus();
-    const noaaActive = Boolean(status.live_audio_running || liveListening);
+    const noaaBackendActive = Boolean(status.live_audio_running && status.audio_mode === 'noaa_live');
+    const noaaBrowserPlaying = Boolean(liveListening && liveAudioContext && noaaPlaybackChunksScheduled > 0);
+    const noaaActive = Boolean(noaaBackendActive || liveListening);
     const airbandActive = Boolean(airband.airband_scan_running);
     updateAirbandTuningDetail(airband, noaaActive);
     syncAirbandHoldAudio(airband);
 
-    el('noaaMenuToggle').textContent = noaaActive ? 'Stop NOAA Weather' : 'Start NOAA Weather';
+    el('noaaMenuToggle').textContent = noaaBackendActive && !noaaBrowserPlaying
+      ? 'Reconnect NOAA Audio'
+      : noaaActive ? 'Stop NOAA Weather' : 'Start NOAA Weather';
     el('noaaMenuToggle').className = noaaActive ? 'stop' : '';
     el('airbandMenuToggle').textContent = airbandActive ? 'Stop Airband Scanner' : 'Start Airband Scanner';
     el('airbandMenuToggle').className = airbandActive ? 'stop' : '';
 
     if (operationTransitionActive || airband.airband_hold_active) return;
-    if (noaaActive) {
+    if (noaaBackendActive && !noaaBrowserPlaying) {
+      setMessage('operationsMessage', 'NOAA receiver is active, but browser audio is not connected. Click Reconnect NOAA Audio.', 'warning');
+    } else if (noaaActive) {
       setMessage('operationsMessage', 'NOAA Weather listening active. Airband scanner is paused while receiver 00000162 is in use.', 'good');
     } else if (airbandActive) {
-      setMessage('operationsMessage', 'Airband scanner running. It will open live audio when activity is detected.', 'warning');
+      const searchLabel = airband.airband_search_mode === 'fast_spectrum' ? 'Fast Spectrum Search' : 'Traditional scan';
+      setMessage('operationsMessage', `${searchLabel} running. It will open live AM audio after validated activity.`, 'warning');
     } else {
       setMessage('operationsMessage', 'NOAA and Airband scanner are stopped.', '');
     }
@@ -2156,9 +2297,12 @@ async function startAirbandBackground(showOverlay = true) {
       `/api/airband/scan/activity/start?scope=${encodeURIComponent(scope)}`,
       {method: 'POST'}
     );
+    const modeLabel = result.airband_search_mode === 'fast_spectrum'
+      ? 'Fast Spectrum Search 120–130 MHz'
+      : `Traditional Audio Samples (${result.scan_scope || scope})`;
     setMessage(
       'airbandScanStatus',
-      `Scanner active: ${result.channel_count || '—'} frequencies (${result.scan_scope || scope}); waiting for activity.`,
+      `Scanner active: ${modeLabel}; waiting for valid AM activity.`,
       'warning'
     );
     pollExperimentalScan();
@@ -2196,16 +2340,21 @@ async function toggleNoaaMenuOperation() {
   setOperationButtonsDisabled(true);
 
   try {
+    if (!liveListening) await prepareNoaaAudioForStart();
     const current = await jsonRequest('/api/status');
+    if (current.live_audio_running && current.audio_mode === 'noaa_live' && !liveListening) {
+      closeMenu();
+      await showBusyAndPaint('Reconnect NOAA Audio…', 'Attaching browser playback to the active NOAA receiver stream.');
+      await attachExistingNoaaLive(current);
+      await hideBusyAfterMinimum(550);
+      return;
+    }
     if (current.live_audio_running || liveListening) {
       await showBusyAndPaint('Stopping NOAA Weather…', 'Releasing the shared audio receiver.');
       await stopLive();
       airbandRestartSuspended = false;
-      if (airbandPausedForNoaa && airbandBackgroundWanted) {
-        airbandPausedForNoaa = false;
-        updateBusy('Restarting Airband background scan…', 'Returning receiver 00000162 to background AM scanning.');
-        await startAirbandBackground(false);
-      }
+      airbandPausedForNoaa = false;
+      airbandBackgroundWanted = false;
       await hideBusyAfterMinimum(550);
       return;
     }
@@ -2221,13 +2370,16 @@ async function toggleNoaaMenuOperation() {
     );
 
     if (airband.airband_scan_running) {
-      const released = await stopAirbandBackground(false, false);
+      const released = await stopAirbandBackground(true, false);
       if (!released) throw new Error('Airband did not release the shared receiver.');
     }
 
+    airbandBackgroundWanted = false;
+    airbandPausedForNoaa = false;
+
     updateBusy(
       'Locating local NOAA Weather channel…',
-      'Scanning NOAA frequencies and selecting the strongest local channel.'
+      'Fast scanning all seven NOAA carriers, then validating clear weather audio.'
     );
     await autoNoaa();
 
@@ -2243,10 +2395,10 @@ async function toggleNoaaMenuOperation() {
   } catch (error) {
     hideBusy();
     airbandRestartSuspended = false;
-    setMessage('operationsMessage', `NOAA operation failed: ${error.message}`, 'error');
-    if (airbandBackgroundWanted && !airbandRestartSuspended && !liveListening) {
-      await startAirbandBackground(true);
-    }
+    airbandBackgroundWanted = false;
+    airbandPausedForNoaa = false;
+    await releaseUnusedPreparedNoaaAudio();
+    setMessage('operationsMessage', `NOAA operation failed: ${error.message}. Airband remains stopped.`, 'error');
   } finally {
     operationTransitionActive = false;
     setOperationButtonsDisabled(false);
@@ -2382,14 +2534,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const settings = await response.json();
     byId("airbandActivityThreshold").value = String(settings.airband_activity_threshold_rms);
     byId("airbandRfGain").value = Number(settings.airband_rf_gain_db).toFixed(1);
+    byId("airbandSearchMode").value = settings.airband_search_mode || "traditional";
+    byId("airbandSpectrumMargin").value = String(settings.airband_spectrum_margin_db == null ? 8 : settings.airband_spectrum_margin_db);
     renderBlockedAirbandFrequencies(settings);
-    tuningMessage().textContent = `Trigger ${fmt(settings.airband_activity_threshold_rms)} RMS · Gain ${fmt(settings.airband_rf_gain_db)} dB. Waiting for live scan measurements.`;
+    const search = settings.airband_search_mode === "fast_spectrum" ? "Fast 120–130 MHz" : "Traditional";
+    tuningMessage().textContent = `${search} · Trigger ${fmt(settings.airband_activity_threshold_rms)} RMS · Gain ${fmt(settings.airband_rf_gain_db)} dB · Carrier +${fmt(settings.airband_spectrum_margin_db)} dB.`;
   }
 
   async function saveAirbandTuning() {
     const payload = {
       airband_activity_threshold_rms: Number(byId("airbandActivityThreshold").value),
-      airband_rf_gain_db: Number(byId("airbandRfGain").value)
+      airband_rf_gain_db: Number(byId("airbandRfGain").value),
+      airband_search_mode: byId("airbandSearchMode").value,
+      airband_spectrum_margin_db: Number(byId("airbandSpectrumMargin").value)
     };
     const response = await fetch("/api/settings/airband-scan", {
       method: "POST",
@@ -2398,7 +2555,8 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     const result = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(result.error || "Unable to save Airband tuning settings.");
-    tuningMessage().textContent = `Applied: trigger ${fmt(result.airband_activity_threshold_rms)} RMS · gain ${fmt(result.airband_rf_gain_db)} dB. New samples use these settings.`;
+    const search = result.airband_search_mode === "fast_spectrum" ? "Fast 120–130 MHz" : "Traditional";
+    tuningMessage().textContent = `Applied: ${search} · trigger ${fmt(result.airband_activity_threshold_rms)} RMS · gain ${fmt(result.airband_rf_gain_db)} dB · carrier +${fmt(result.airband_spectrum_margin_db)} dB. Restart scanner to change search mode.`;
   }
 
   async function refreshAirbandMeasurement() {
@@ -2410,9 +2568,12 @@ document.addEventListener('DOMContentLoaded', () => {
       const gain = status.airband_rf_gain_db;
       const last = status.airband_last_measurement_dbfs;
       const best = status.airband_best_rms_sample;
+      const search = status.airband_search_mode === "fast_spectrum" ? "Fast" : "Traditional";
       if (last != null) {
         const hit = Number(last) >= Number(trigger) ? "HIT" : "below trigger";
-        tuningMessage().textContent = `Last ${fmt(last)} RMS / trigger ${fmt(trigger)} (${hit}) · best ${fmt(best)} · gain ${fmt(gain)} dB`;
+        tuningMessage().textContent = `${search} · Last ${fmt(last)} RMS / trigger ${fmt(trigger)} (${hit}) · best ${fmt(best)} · gain ${fmt(gain)} dB`;
+      } else if (status.airband_search_mode === "fast_spectrum") {
+        tuningMessage().textContent = `Fast · carrier trigger +${fmt(status.airband_spectrum_margin_db)} dB · gain ${fmt(gain)} dB · awaiting AM validation.`;
       }
     } catch (error) {
       void error;
@@ -2426,6 +2587,56 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     loadAirbandTuning().catch((error) => { tuningMessage().textContent = error.message; });
     setInterval(refreshAirbandMeasurement, 2000);
+  });
+})();
+</script>
+
+
+<script>
+/* Step 57: map scanner controls and Airband apply layout */
+(() => {
+  const byId = (id) => document.getElementById(id);
+  const setMapState = (value) => {
+    const target = byId("mapAirbandActionState");
+    if (target) target.textContent = value;
+  };
+  async function scannerAction(action) {
+    const response = await fetch(`/api/airband/scan/activity/${action}`, {method: "POST"});
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || `Unable to ${action} held frequency.`);
+    setMapState(action === "block" ? "Blocked; scanning resumes" : "Skipped; scanning resumes");
+  }
+  async function refreshMapScannerControls() {
+    try {
+      const response = await fetch("/api/airband/scan/status", {cache: "no-store"});
+      if (!response.ok) return;
+      const status = await response.json();
+      const holding = Boolean(status.airband_hold_active);
+      const skip = byId("mapAirbandSkipHeld");
+      const block = byId("mapAirbandBlockHeld");
+      if (skip) skip.disabled = !holding;
+      if (block) block.disabled = !holding;
+      if (holding) {
+        const channel = status.airband_hold_channel || {};
+        const mhz = Number(channel.frequency_mhz || (Number(channel.frequency_hz || 0) / 1000000)).toFixed(3);
+        setMapState(`HOLD ${mhz} MHz`);
+      } else if (status.airband_scan_running) {
+        setMapState("Scanning — controls enable on hold");
+      } else {
+        setMapState("Scanner stopped");
+      }
+    } catch (error) {
+      void error;
+    }
+  }
+  window.addEventListener("DOMContentLoaded", () => {
+    const skip = byId("mapAirbandSkipHeld");
+    const block = byId("mapAirbandBlockHeld");
+    if (!skip || !block) return;
+    skip.addEventListener("click", () => scannerAction("skip").catch((error) => setMapState(error.message)));
+    block.addEventListener("click", () => scannerAction("block").catch((error) => setMapState(error.message)));
+    refreshMapScannerControls();
+    window.setInterval(refreshMapScannerControls, 500);
   });
 })();
 </script>

@@ -20,13 +20,17 @@ from __future__ import annotations
 
 from array import array
 import argparse
+import csv
 import io
 import json
 import logging
 from logging.handlers import RotatingFileHandler
 import math
 import mimetypes
+import shutil
 import signal
+import statistics
+import subprocess
 import threading
 import time
 import urllib.request
@@ -48,6 +52,7 @@ from rtl_windows_backend import (
     AudioManager,
     DecoderManager,
     SettingsStore,
+    windows_path,
 )
 
 LOG = logging.getLogger("rtl_windows_pi_port_backend")
@@ -62,6 +67,17 @@ MIN_AIRBAND_ACTIVITY_RMS = 100.0
 MAX_AIRBAND_ACTIVITY_RMS = 5000.0
 MIN_AIRBAND_RF_GAIN_DB = 0.0
 MAX_AIRBAND_RF_GAIN_DB = 49.6
+DEFAULT_AIRBAND_SEARCH_MODE = "traditional"
+DEFAULT_AIRBAND_SPECTRUM_MARGIN_DB = 8.0
+MIN_AIRBAND_SPECTRUM_MARGIN_DB = 2.0
+MAX_AIRBAND_SPECTRUM_MARGIN_DB = 30.0
+FAST_AIRBAND_LOW_HZ = 120_000_000
+FAST_AIRBAND_HIGH_HZ = 130_000_000
+FAST_AIRBAND_CHANNEL_STEP_HZ = 25_000
+FAST_AIRBAND_BIN_HZ = 12_500
+FAST_NOAA_LOW_HZ = 162_387_500
+FAST_NOAA_HIGH_HZ = 162_562_500
+FAST_NOAA_BIN_HZ = 12_500
 
 
 class PiPortSettingsStore(SettingsStore):
@@ -71,6 +87,8 @@ class PiPortSettingsStore(SettingsStore):
         self.airband_radius_miles = DEFAULT_RADIUS_MILES
         self.airband_activity_threshold_rms = DEFAULT_AIRBAND_ACTIVITY_RMS
         self.airband_rf_gain_db = DEFAULT_AIRBAND_RF_GAIN_DB
+        self.airband_search_mode = DEFAULT_AIRBAND_SEARCH_MODE
+        self.airband_spectrum_margin_db = DEFAULT_AIRBAND_SPECTRUM_MARGIN_DB
         self.airband_blocked_frequencies_hz: list[int] = []
         self.noaa_frequency_hz = int(NOAA_PROFILE["frequency_hz"])
         self.noaa_station = f"Configured NOAA — {self.noaa_frequency_hz / 1_000_000:.3f} MHz"
@@ -86,6 +104,12 @@ class PiPortSettingsStore(SettingsStore):
                 )
                 self.airband_rf_gain_db = self._validate_airband_gain(
                     loaded.get("airband_rf_gain_db", DEFAULT_AIRBAND_RF_GAIN_DB)
+                )
+                self.airband_search_mode = self._validate_airband_search_mode(
+                    loaded.get("airband_search_mode", DEFAULT_AIRBAND_SEARCH_MODE)
+                )
+                self.airband_spectrum_margin_db = self._validate_airband_spectrum_margin(
+                    loaded.get("airband_spectrum_margin_db", DEFAULT_AIRBAND_SPECTRUM_MARGIN_DB)
                 )
                 blocked = loaded.get("airband_blocked_frequencies_hz", [])
                 if isinstance(blocked, list):
@@ -120,6 +144,20 @@ class PiPortSettingsStore(SettingsStore):
             raise ValueError("Airband RF gain must be between 0.0 and 49.6 dB.")
         return round(gain, 1)
 
+    @staticmethod
+    def _validate_airband_search_mode(value: Any) -> str:
+        mode = str(value or "").strip().lower()
+        if mode not in ("traditional", "fast_spectrum"):
+            raise ValueError("Airband search mode must be traditional or fast_spectrum.")
+        return mode
+
+    @staticmethod
+    def _validate_airband_spectrum_margin(value: Any) -> float:
+        margin = float(value)
+        if not MIN_AIRBAND_SPECTRUM_MARGIN_DB <= margin <= MAX_AIRBAND_SPECTRUM_MARGIN_DB:
+            raise ValueError("Fast carrier trigger must be between 2 and 30 dB above local spectrum floor.")
+        return round(margin, 1)
+
     def _persist_port_settings(self) -> None:
         with self.lock:
             payload = {
@@ -127,6 +165,8 @@ class PiPortSettingsStore(SettingsStore):
                 "airband_radius_miles": self.airband_radius_miles,
                 "airband_activity_threshold_rms": self.airband_activity_threshold_rms,
                 "airband_rf_gain_db": self.airband_rf_gain_db,
+                "airband_search_mode": self.airband_search_mode,
+                "airband_spectrum_margin_db": self.airband_spectrum_margin_db,
                 "airband_blocked_frequencies_hz": self.airband_blocked_frequencies_hz,
                 "noaa_selection": {
                     "frequency_hz": self.noaa_frequency_hz,
@@ -170,6 +210,9 @@ class PiPortSettingsStore(SettingsStore):
             "airband_rf_gain_db": self.airband_rf_gain_db,
             "activity_metric": "audio_rms_sample",
             "gain_units": "dB",
+            "airband_search_mode": self.airband_search_mode,
+            "airband_spectrum_margin_db": self.airband_spectrum_margin_db,
+            "airband_fast_range_hz": [FAST_AIRBAND_LOW_HZ, FAST_AIRBAND_HIGH_HZ],
             "airband_blocked_frequencies_hz": list(self.airband_blocked_frequencies_hz),
         }
 
@@ -180,6 +223,12 @@ class PiPortSettingsStore(SettingsStore):
             )
         if payload.get("airband_rf_gain_db") not in (None, ""):
             self.airband_rf_gain_db = self._validate_airband_gain(payload["airband_rf_gain_db"])
+        if payload.get("airband_search_mode") not in (None, ""):
+            self.airband_search_mode = self._validate_airband_search_mode(payload["airband_search_mode"])
+        if payload.get("airband_spectrum_margin_db") not in (None, ""):
+            self.airband_spectrum_margin_db = self._validate_airband_spectrum_margin(
+                payload["airband_spectrum_margin_db"]
+            )
         self._persist_port_settings()
         return self.airband_tuning()
 
@@ -225,6 +274,38 @@ def pcm_from_wav(content: bytes) -> tuple[bytes, int]:
         return wav_file.readframes(wav_file.getnframes()), wav_file.getframerate()
 
 
+
+def noaa_audio_quality_from_wav(content: bytes) -> dict[str, float]:
+    """Estimate NOAA usefulness from coherent audio versus broadband discriminator hiss."""
+    pcm, _rate = pcm_from_wav(content)
+    samples = array("h")
+    samples.frombytes(pcm[: len(pcm) - (len(pcm) % 2)])
+    if len(samples) < 16:
+        return {"rms_sample": 0.0, "smooth_rms_sample": 0.0, "hiss_rms_sample": 0.0, "quality_db": -99.0}
+    mean = sum(samples) / len(samples)
+    centered = [float(value) - mean for value in samples]
+    rms = math.sqrt(sum(value * value for value in centered) / len(centered))
+    window = 8
+    rolling = sum(centered[:window])
+    smooth = []
+    for index in range(window, len(centered)):
+        smooth.append(rolling / window)
+        rolling += centered[index] - centered[index - window]
+    if not smooth:
+        smooth = centered
+    smooth_rms = math.sqrt(sum(value * value for value in smooth) / len(smooth))
+    hiss_rms = math.sqrt(
+        sum((centered[index + window] - smooth[index]) ** 2 for index in range(len(smooth))) / len(smooth)
+    )
+    quality_db = 20.0 * math.log10((smooth_rms + 1.0) / (hiss_rms + 1.0))
+    return {
+        "rms_sample": round(rms, 2),
+        "smooth_rms_sample": round(smooth_rms, 2),
+        "hiss_rms_sample": round(hiss_rms, 2),
+        "quality_db": round(quality_db, 2),
+    }
+
+
 def make_wav(pcm: bytes, rate: int) -> bytes:
     output = io.BytesIO()
     with wave.open(output, "wb") as wav_file:
@@ -266,17 +347,61 @@ class AudioOperations:
             return make_wav(b"".join(pcm_parts), rate)
 
     def live_noaa_start(self, settings: PiPortSettingsStore) -> dict[str, Any]:
+        # Verified NOAA continuous live start after fast selection.
+        # A just-completed rtl_power/NFM survey can leave the RTL-SDR in a brief
+        # release interval; require actual audio output before declaring success.
         with self.lock:
             if self.audio.live_is_running():
                 if self.noaa_live_active:
-                    return {"started": False, "already_running": True}
+                    return {"started": False, "already_running": True, "startup_verified": True}
                 raise RuntimeError("Audio receiver is in use by Airband scanning or capture.")
             profile = dict(NOAA_PROFILE)
             profile["frequency_hz"] = settings.noaa_frequency_hz
             profile["rtl_fm_mode"] = "fm"
-            result = self.audio._start_live_process(profile, None)
-            self.noaa_live_active = True
-            return result
+            last_error = "No continuous audio block was delivered."
+            for attempt, settle_seconds in enumerate((0.45, 0.85), start=1):
+                time.sleep(settle_seconds)
+                try:
+                    result = self.audio._start_live_process(profile, None)
+                    first_chunk = self.audio.next_live_wav(0, timeout_seconds=2.5)
+                    if first_chunk is not None and self.audio.live_is_running():
+                        self.noaa_live_active = True
+                        LOG.info(
+                            "NOAA live startup verified at %.3f MHz on attempt %s after %.2f second settle",
+                            settings.noaa_frequency_hz / 1_000_000,
+                            attempt,
+                            settle_seconds,
+                        )
+                        return {
+                            **result,
+                            "started": True,
+                            "startup_verified": True,
+                            "startup_attempt": attempt,
+                            "startup_settle_seconds": settle_seconds,
+                        }
+                    status = self.audio.live_status()
+                    last_error = str(status.get("last_error") or "No live audio samples arrived.")
+                    LOG.warning(
+                        "NOAA live startup attempt %s at %.3f MHz produced no audio: %s",
+                        attempt,
+                        settings.noaa_frequency_hz / 1_000_000,
+                        last_error,
+                    )
+                except Exception as exc:
+                    last_error = str(exc)
+                    LOG.warning(
+                        "NOAA live startup attempt %s at %.3f MHz failed: %s",
+                        attempt,
+                        settings.noaa_frequency_hz / 1_000_000,
+                        last_error,
+                    )
+                finally:
+                    if not self.noaa_live_active:
+                        self.audio.stop_live()
+            raise RuntimeError(
+                f"NOAA selected {settings.noaa_frequency_hz / 1_000_000:.3f} MHz "
+                f"but continuous audio failed after two starts: {last_error}"
+            )
 
     def live_noaa_stop(self) -> dict[str, Any]:
         with self.lock:
@@ -320,19 +445,204 @@ class AudioOperations:
             profile["gain_db"] = float(gain_db)
         return self._capture_profile(profile, seconds, channel)
 
+    def capture_airband_spectrum(
+        self,
+        low_hz: int,
+        high_hz: int,
+        bin_hz: int,
+        gain_db: float,
+    ) -> list[dict[str, Any]]:
+        """Run one rtl_power sweep using the dedicated NOAA/Airband receiver."""
+        with self.lock:
+            if self.noaa_live_active or self.airband_live_active or self.audio.live_is_running() or self.audio.is_running():
+                raise RuntimeError("Audio receiver is already in use.")
+            rtl_power = shutil.which("rtl_power") or shutil.which("rtl_power.exe")
+            if not rtl_power:
+                raise RuntimeError(
+                    "Fast Spectrum Search requires rtl_power.exe in PATH alongside rtl_fm.exe. "
+                    "Traditional Audio Samples remains available."
+                )
+            index = self.audio.audio_index()
+            self.audio.runtime_dir.mkdir(parents=True, exist_ok=True)
+            csv_path = self.audio.runtime_dir / "latest_airband_fast_spectrum.csv"
+            log_path = self.audio.runtime_dir / "latest_airband_fast_spectrum.log"
+            csv_path.unlink(missing_ok=True)
+            log_path.unlink(missing_ok=True)
+            command = [
+                windows_path(Path(rtl_power)),
+                "-d", str(index),
+                "-f", f"{int(low_hz)}:{int(high_hz)}:{int(bin_hz)}",
+                "-i", "1",
+                "-1",
+                "-g", str(float(gain_db)),
+                windows_path(csv_path),
+            ]
+            started = time.monotonic()
+            completed = subprocess.run(
+                command,
+                cwd=windows_path(self.audio.runtime_dir),
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=18,
+            )
+            log_path.write_text(
+                (completed.stdout or "") + "\n" + (completed.stderr or ""),
+                encoding="utf-8",
+                newline="\n",
+            )
+            if completed.returncode != 0:
+                raise RuntimeError(
+                    f"rtl_power fast spectrum sweep failed with exit code {completed.returncode}; "
+                    f"see {log_path}."
+                )
+            if not csv_path.exists():
+                raise RuntimeError("rtl_power completed without writing fast spectrum CSV output.")
+            rows: list[dict[str, Any]] = []
+            with csv_path.open("r", encoding="utf-8", newline="") as handle:
+                for csv_row in csv.reader(handle):
+                    if len(csv_row) < 7:
+                        continue
+                    try:
+                        low = float(csv_row[2])
+                        high = float(csv_row[3])
+                        step = float(csv_row[4])
+                        powers = [float(value) for value in csv_row[6:] if value.strip()]
+                    except ValueError:
+                        continue
+                    if not powers or step <= 0:
+                        continue
+                    rows.append({
+                        "low_hz": low,
+                        "high_hz": high,
+                        "step_hz": step,
+                        "powers_db": powers,
+                        "noise_floor_db": statistics.median(powers),
+                    })
+            if not rows:
+                raise RuntimeError("rtl_power output did not contain usable spectrum bins.")
+            LOG.info(
+                "Fast Airband spectrum sweep completed over %.3f-%.3f MHz in %.2f seconds using %s rows",
+                low_hz / 1_000_000,
+                high_hz / 1_000_000,
+                time.monotonic() - started,
+                len(rows),
+            )
+            return rows
+
     def survey_noaa(self, settings: PiPortSettingsStore) -> dict[str, Any]:
-        results = []
+        # Fast RF prefilter: one sweep sees all seven NOAA carrier positions.
+        spectrum_gain_db = float(NOAA_PROFILE.get("gain_db", DEFAULT_AIRBAND_RF_GAIN_DB))
+        rows = self.capture_airband_spectrum(
+            FAST_NOAA_LOW_HZ,
+            FAST_NOAA_HIGH_HZ,
+            FAST_NOAA_BIN_HZ,
+            spectrum_gain_db,
+        )
+        rf_results: list[dict[str, Any]] = []
         for frequency_hz in NOAA_FREQUENCIES:
+            selected: dict[str, float] | None = None
+            for row in rows:
+                low = float(row["low_hz"])
+                high = float(row["high_hz"])
+                step = float(row["step_hz"])
+                if not low <= frequency_hz <= high or step <= 0:
+                    continue
+                center = int(round((frequency_hz - low) / step))
+                powers = row["powers_db"]
+                nearby = [
+                    float(powers[index]) for index in (center - 1, center, center + 1)
+                    if 0 <= index < len(powers)
+                ]
+                if not nearby:
+                    continue
+                power_db = max(nearby)
+                margin_db = power_db - float(row["noise_floor_db"])
+                if selected is None or margin_db > selected["carrier_margin_db"]:
+                    selected = {"carrier_power_db": power_db, "carrier_margin_db": margin_db}
+            if selected is not None:
+                rf_results.append({
+                    "frequency_hz": frequency_hz,
+                    "carrier_power_db": round(selected["carrier_power_db"], 2),
+                    "carrier_margin_db": round(selected["carrier_margin_db"], 2),
+                })
+        if not rf_results:
+            raise RuntimeError("Fast NOAA spectrum search returned no measurements for the seven NOAA channels.")
+        rf_results.sort(key=lambda row: (row["carrier_margin_db"], row["carrier_power_db"]), reverse=True)
+
+        # Fast spectrum discovers candidates; brief NFM checks determine which
+        # candidate is clear weather audio rather than static or an RF spur.
+        preferred_hz = int(NOAA_PROFILE["frequency_hz"])
+        validate_hz = [int(row["frequency_hz"]) for row in rf_results[:3]]
+        if preferred_hz not in validate_hz:
+            validate_hz.append(preferred_hz)
+        validated: list[dict[str, Any]] = []
+        for frequency_hz in validate_hz:
+            rf = next(row for row in rf_results if int(row["frequency_hz"]) == frequency_hz)
             profile = dict(NOAA_PROFILE)
             profile["frequency_hz"] = frequency_hz
             profile["rtl_fm_mode"] = "fm"
-            wav_content = self._capture_profile(profile, 1.0)
-            results.append({"frequency_hz": frequency_hz, "rms_sample": round(rms_from_wav(wav_content), 2)})
-        results.sort(key=lambda row: row["rms_sample"], reverse=True)
-        best = results[0]
-        station = f"AUTO SELECT (ALL 7) — {best['frequency_hz'] / 1_000_000:.3f} MHz"
+            wav_content = self._capture_profile(profile, 0.65)
+            quality = noaa_audio_quality_from_wav(wav_content)
+            # Step 63: normalize NOAA audio-quality helper field names.
+            # Step 57 used quality_db/smooth_rms_sample; Step 59 expects
+            # audio_quality_db/program_rms_sample for hybrid selection.
+            if "audio_quality_db" not in quality:
+                quality["audio_quality_db"] = float(quality.get("quality_db", -99.0))
+            if "program_rms_sample" not in quality:
+                quality["program_rms_sample"] = float(
+                    quality.get("smooth_rms_sample", quality.get("rms_sample", 0.0))
+                )
+            if "hiss_rms_sample" not in quality:
+                quality["hiss_rms_sample"] = 0.0
+            LOG.info(
+                "Fast NOAA validation candidate %.3f MHz RF margin %.2f dB audio quality %.2f dB RMS %.2f",
+                frequency_hz / 1_000_000,
+                float(rf["carrier_margin_db"]),
+                float(quality["audio_quality_db"]),
+                float(quality.get("rms_sample", 0.0)),
+            )
+            validated.append({**rf, **quality, "validated_nfm": True})
+        validated.sort(
+            key=lambda row: (
+                row["audio_quality_db"],
+                row["program_rms_sample"],
+                row["carrier_margin_db"],
+            ),
+            reverse=True,
+        )
+        best = validated[0]
+        preferred = next((row for row in validated if int(row["frequency_hz"]) == preferred_hz), None)
+        preferred_near_tie = False
+        if preferred and preferred["audio_quality_db"] >= best["audio_quality_db"] - 1.0:
+            best = preferred
+            preferred_near_tie = True
+
+        station = f"AUTO FAST+AUDIO SELECT — {best['frequency_hz'] / 1_000_000:.3f} MHz"
+        LOG.info(
+            "Fast NOAA selected %.3f MHz RF margin %.2f dB audio quality %.2f dB RMS %.2f preferred_near_tie=%s",
+            best["frequency_hz"] / 1_000_000,
+            float(best["carrier_margin_db"]),
+            float(best["audio_quality_db"]),
+            float(best.get("rms_sample", 0.0)),
+            preferred_near_tie,
+        )
         settings.save_noaa_selection(int(best["frequency_hz"]), station)
-        return {"best_frequency_hz": best["frequency_hz"], "channels": results, "station": station, "scanned_frequency_count": len(results), "selection_policy": "all_seven_each_selection"}
+        return {
+            "best_frequency_hz": best["frequency_hz"],
+            "channels": rf_results,
+            "validated_channels": validated,
+            "station": station,
+            "selected_carrier_power_db": best["carrier_power_db"],
+            "selected_carrier_margin_db": best["carrier_margin_db"],
+            "selected_audio_quality_db": best["audio_quality_db"],
+            "selected_audio_rms_sample": best["rms_sample"],
+            "preferred_near_tie_selected": preferred_near_tie,
+            "rf_scanned_frequency_count": len(rf_results),
+            "audio_validated_frequency_count": len(validated),
+            "selection_policy": "rf_prefilter_then_nfm_audio_quality_validation",
+            "scan_range_hz": [FAST_NOAA_LOW_HZ, FAST_NOAA_HIGH_HZ],
+        }
 
 
 class AirbandScanPort:
@@ -364,6 +674,12 @@ class AirbandScanPort:
             "airband_hold_rms_sample": None,
             "airband_hold_quiet_seconds": 0.0,
             "airband_hold_release_reason": None,
+            "airband_search_mode": self.settings.airband_search_mode,
+            "airband_spectrum_sweeps": 0,
+            "airband_spectrum_candidate_count": 0,
+            "airband_spectrum_best_margin_db": None,
+            "airband_spectrum_best_frequency_hz": None,
+            "airband_spectrum_validation_count": 0,
         }
         self.hold_identifier = 0
         self.last_audio: bytes | None = None
@@ -414,10 +730,90 @@ class AirbandScanPort:
         ]
         return priority or channels
 
+    @staticmethod
+    def _fast_unlisted_channel(frequency_hz: int) -> dict[str, Any]:
+        frequency_mhz = frequency_hz / 1_000_000
+        native = {
+            "frequency_hz": frequency_hz,
+            "frequency_mhz": frequency_mhz,
+            "frequency_use": "FAST CARRIER",
+            "serviced_facility": "UNLISTED",
+            "serviced_facility_name": "Unlisted Airband Carrier",
+            "distance_miles": None,
+        }
+        return {
+            "frequency_mhz": frequency_mhz,
+            "frequency_hz": frequency_hz,
+            "use": "FAST CARRIER",
+            "airport_id": "UNLISTED",
+            "airport_name": "Unlisted Airband Carrier",
+            "facility_type": "Carrier Search",
+            "distance_miles": None,
+            "_native": native,
+        }
+
+    def _spectrum_power_for_frequency(self, rows: list[dict[str, Any]], frequency_hz: int) -> tuple[float, float] | None:
+        best: tuple[float, float] | None = None
+        for row in rows:
+            low = float(row["low_hz"])
+            high = float(row["high_hz"])
+            step = float(row["step_hz"])
+            if not low <= frequency_hz <= high:
+                continue
+            index = int(round((frequency_hz - low) / step))
+            powers = row["powers_db"]
+            if not 0 <= index < len(powers):
+                continue
+            power = float(powers[index])
+            margin = power - float(row["noise_floor_db"])
+            if best is None or margin > best[1]:
+                best = (power, margin)
+        return best
+
+    def _fast_spectrum_candidates(self) -> list[dict[str, Any]]:
+        rows = self.audio_ops.capture_airband_spectrum(
+            FAST_AIRBAND_LOW_HZ,
+            FAST_AIRBAND_HIGH_HZ,
+            FAST_AIRBAND_BIN_HZ,
+            self.settings.airband_rf_gain_db,
+        )
+        blocked = set(self.settings.airband_blocked_frequencies_hz)
+        known = {
+            int(channel["frequency_hz"]): channel
+            for channel in self.nearby()["channels"]
+            if FAST_AIRBAND_LOW_HZ <= int(channel["frequency_hz"]) <= FAST_AIRBAND_HIGH_HZ
+        }
+        candidates: list[dict[str, Any]] = []
+        for frequency_hz in range(
+            FAST_AIRBAND_LOW_HZ,
+            FAST_AIRBAND_HIGH_HZ + 1,
+            FAST_AIRBAND_CHANNEL_STEP_HZ,
+        ):
+            if frequency_hz in blocked:
+                continue
+            measurement = self._spectrum_power_for_frequency(rows, frequency_hz)
+            if measurement is None:
+                continue
+            power_db, margin_db = measurement
+            if margin_db < self.settings.airband_spectrum_margin_db:
+                continue
+            channel = known.get(frequency_hz) or self._fast_unlisted_channel(frequency_hz)
+            candidates.append({
+                "channel": channel,
+                "spectrum_power_db": round(power_db, 2),
+                "spectrum_margin_db": round(margin_db, 2),
+            })
+        candidates.sort(key=lambda candidate: candidate["spectrum_margin_db"], reverse=True)
+        return candidates[:12]
+
     def status(self) -> dict[str, Any]:
         with self.lock:
             status = dict(self.state)
+        active_search_mode = status.get("airband_search_mode", self.settings.airband_search_mode)
         status.update(self.settings.airband_tuning())
+        status["configured_airband_search_mode"] = self.settings.airband_search_mode
+        if status.get("airband_scan_running"):
+            status["airband_search_mode"] = active_search_mode
         status["airband_best_rms_sample"] = round(self.best_rms, 2) if self.best_rms else None
         return status
 
@@ -425,9 +821,17 @@ class AirbandScanPort:
         with self.lock:
             if self.state["airband_scan_running"]:
                 return {"started": False, "channel_count": 0, **self.status()}
-        channels = self._select_channels(scope)
-        if not channels:
-            raise RuntimeError("No nearby Airband channels are available for scanning.")
+        if self.settings.airband_search_mode == "fast_spectrum":
+            channels: list[dict[str, Any]] = []
+            if not (shutil.which("rtl_power") or shutil.which("rtl_power.exe")):
+                raise RuntimeError(
+                    "Fast Spectrum Search requires rtl_power.exe in PATH alongside rtl_fm.exe. "
+                    "Select Traditional Audio Samples until rtl_power is installed."
+                )
+        else:
+            channels = self._select_channels(scope)
+            if not channels:
+                raise RuntimeError("No nearby Airband channels are available for scanning.")
         self.stop_event.clear()
         self.release_hold_event.clear()
         with self.lock:
@@ -444,10 +848,23 @@ class AirbandScanPort:
                 "airband_hold_channel": None,
                 "airband_hold_quiet_seconds": 0.0,
                 "airband_hold_release_reason": None,
+                "airband_search_mode": self.settings.airband_search_mode,
+                "airband_spectrum_sweeps": 0,
+                "airband_spectrum_candidate_count": 0,
+                "airband_spectrum_best_margin_db": None,
+                "airband_spectrum_best_frequency_hz": None,
+                "airband_spectrum_validation_count": 0,
             })
-        self.thread = threading.Thread(target=self._run, args=(channels,), daemon=True, name="pi-port-airband-scan")
+        target = self._run_fast_spectrum if self.settings.airband_search_mode == "fast_spectrum" else self._run
+        self.thread = threading.Thread(target=target, args=(channels,), daemon=True, name="pi-port-airband-scan")
         self.thread.start()
-        return {"started": True, "channel_count": len(channels), "scan_scope": scope, **self.status()}
+        return {
+            "started": True,
+            "channel_count": len(channels) if channels else 401,
+            "scan_scope": scope,
+            "search_mode": self.settings.airband_search_mode,
+            **self.status(),
+        }
 
     def stop(self) -> dict[str, Any]:
         self.stop_event.set()
@@ -532,6 +949,82 @@ class AirbandScanPort:
                 if not self.stop_event.is_set():
                     self.state["airband_scan_state"] = "searching"
             self.release_hold_event.clear()
+
+    def _run_fast_spectrum(self, channels: list[dict[str, Any]]) -> None:
+        del channels
+        try:
+            while not self.stop_event.is_set():
+                with self.lock:
+                    self.state["airband_scan_cycles"] += 1
+                    self.state["airband_scan_state"] = "spectrum_searching"
+                candidates = self._fast_spectrum_candidates()
+                with self.lock:
+                    self.state["airband_spectrum_sweeps"] += 1
+                    self.state["airband_spectrum_candidate_count"] = len(candidates)
+                    if candidates:
+                        self.state["airband_spectrum_best_margin_db"] = candidates[0]["spectrum_margin_db"]
+                        self.state["airband_spectrum_best_frequency_hz"] = candidates[0]["channel"]["frequency_hz"]
+                    else:
+                        self.state["airband_spectrum_best_margin_db"] = None
+                        self.state["airband_spectrum_best_frequency_hz"] = None
+                for spectrum_candidate in candidates:
+                    if self.stop_event.is_set():
+                        break
+                    channel = spectrum_candidate["channel"]
+                    try:
+                        wav_content = self.audio_ops.capture_airband(
+                            channel["_native"], 0.5, self.settings.airband_rf_gain_db
+                        )
+                        rms = rms_from_wav(wav_content)
+                    except Exception as exc:
+                        if self.stop_event.is_set():
+                            break
+                        with self.lock:
+                            self.state["airband_scan_error"] = str(exc)
+                        continue
+                    candidate = {
+                        "channel": {key: value for key, value in channel.items() if key != "_native"},
+                        "audio_rms_sample": round(rms, 2),
+                        "rf_estimated_snr_db": spectrum_candidate["spectrum_margin_db"],
+                        "spectrum_power_db": spectrum_candidate["spectrum_power_db"],
+                        "spectrum_margin_db": spectrum_candidate["spectrum_margin_db"],
+                        "observed_utc": int(time.time()),
+                        "audio_url": "/api/airband/scan/last_audio.wav",
+                    }
+                    detected = rms >= self.settings.airband_activity_threshold_rms
+                    with self.lock:
+                        self.state["airband_channels_scanned"] += 1
+                        self.state["airband_spectrum_validation_count"] += 1
+                        self.state["airband_current_channel"] = candidate["channel"]
+                        self.state["airband_last_measurement_dbfs"] = round(rms, 2)
+                        self.state["airband_last_signal_snr_db"] = spectrum_candidate["spectrum_margin_db"]
+                        if rms > self.best_rms:
+                            self.best_rms = rms
+                            self.best_audio = wav_content
+                            self.state["airband_best_candidate"] = candidate
+                        if detected:
+                            self.last_audio = wav_content
+                            self.state["airband_last_detection"] = {
+                                **candidate,
+                                "threshold_rms_sample": self.settings.airband_activity_threshold_rms,
+                                "rf_gain_db": self.settings.airband_rf_gain_db,
+                                "audio_url": "/api/airband/scan/last_audio.wav",
+                            }
+                    if detected and not self.stop_event.is_set():
+                        self._hold_detected_channel(channel, candidate)
+                        break
+                time.sleep(0.05)
+        except Exception as exc:
+            with self.lock:
+                self.state["airband_scan_error"] = str(exc)
+                self.state["airband_scan_state"] = "error"
+        finally:
+            self.audio_ops.live_airband_stop()
+            with self.lock:
+                self.state["airband_hold_active"] = False
+                self.state["airband_scan_running"] = False
+                if self.state["airband_scan_state"] != "error":
+                    self.state["airband_scan_state"] = "stopped"
 
     def _run(self, channels: list[dict[str, Any]]) -> None:
         try:
@@ -1228,16 +1721,18 @@ class PiPortHandler(BaseHTTPRequestHandler):
                 tuning = self.settings.save_airband_tuning(self.read_json())
                 self.send_json({"saved": True, **tuning})
             elif request.path == "/api/noaa/live/start":
+                # NOAA owns the shared receiver; stop any active Airband scan first.
                 if self.scan.status()["airband_scan_running"]:
-                    raise RuntimeError("Stop Airband background scan before starting NOAA listening.")
+                    self.scan.stop()
                 self.audio_ops.live_noaa_start(self.settings)
                 self.send_json({"started": True, **self.port_status()})
             elif request.path == "/api/noaa/live/stop":
                 self.audio_ops.live_noaa_stop()
                 self.send_json({"stopped": True, **self.port_status()})
             elif request.path in ("/api/noaa/auto/start", "/api/noaa/auto/rescan"):
+                # NOAA owns the shared receiver; stop any active Airband scan first.
                 if self.scan.status()["airband_scan_running"]:
-                    raise RuntimeError("Stop Airband background scan before selecting NOAA.")
+                    self.scan.stop()
                 reset_requested = request.path.endswith("/rescan")
                 if self.audio_ops.noaa_live_active:
                     self.audio_ops.live_noaa_stop()
