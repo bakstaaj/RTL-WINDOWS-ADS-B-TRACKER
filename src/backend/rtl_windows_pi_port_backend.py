@@ -57,6 +57,11 @@ NOAA_FREQUENCIES = [
 ]
 DEFAULT_RADIUS_MILES = 100.0
 DEFAULT_AIRBAND_ACTIVITY_RMS = 650.0
+DEFAULT_AIRBAND_RF_GAIN_DB = float(AIRBAND_LIVE_AUDIO_PROFILE.get("gain_db", 40.2))
+MIN_AIRBAND_ACTIVITY_RMS = 100.0
+MAX_AIRBAND_ACTIVITY_RMS = 5000.0
+MIN_AIRBAND_RF_GAIN_DB = 0.0
+MAX_AIRBAND_RF_GAIN_DB = 49.6
 
 
 class PiPortSettingsStore(SettingsStore):
@@ -64,6 +69,9 @@ class PiPortSettingsStore(SettingsStore):
 
     def __init__(self, path: Path) -> None:
         self.airband_radius_miles = DEFAULT_RADIUS_MILES
+        self.airband_activity_threshold_rms = DEFAULT_AIRBAND_ACTIVITY_RMS
+        self.airband_rf_gain_db = DEFAULT_AIRBAND_RF_GAIN_DB
+        self.airband_blocked_frequencies_hz: list[int] = []
         self.noaa_frequency_hz = int(NOAA_PROFILE["frequency_hz"])
         self.noaa_station = f"Configured NOAA — {self.noaa_frequency_hz / 1_000_000:.3f} MHz"
         super().__init__(path)
@@ -73,6 +81,17 @@ class PiPortSettingsStore(SettingsStore):
                 self.airband_radius_miles = self._validate_radius(
                     loaded.get("airband_radius_miles", DEFAULT_RADIUS_MILES)
                 )
+                self.airband_activity_threshold_rms = self._validate_airband_threshold(
+                    loaded.get("airband_activity_threshold_rms", DEFAULT_AIRBAND_ACTIVITY_RMS)
+                )
+                self.airband_rf_gain_db = self._validate_airband_gain(
+                    loaded.get("airband_rf_gain_db", DEFAULT_AIRBAND_RF_GAIN_DB)
+                )
+                blocked = loaded.get("airband_blocked_frequencies_hz", [])
+                if isinstance(blocked, list):
+                    self.airband_blocked_frequencies_hz = sorted({
+                        int(value) for value in blocked if int(value) > 0
+                    })
                 selection = loaded.get("noaa_selection")
                 if isinstance(selection, dict) and int(selection.get("frequency_hz", 0)) in NOAA_FREQUENCIES:
                     self.noaa_frequency_hz = int(selection["frequency_hz"])
@@ -87,11 +106,28 @@ class PiPortSettingsStore(SettingsStore):
             raise ValueError("Airband radius must be greater than 0 and no more than 500 miles.")
         return round(radius, 1)
 
+    @staticmethod
+    def _validate_airband_threshold(value: Any) -> float:
+        threshold = float(value)
+        if not MIN_AIRBAND_ACTIVITY_RMS <= threshold <= MAX_AIRBAND_ACTIVITY_RMS:
+            raise ValueError("Airband activity threshold must be between 100 and 5000 RMS.")
+        return round(threshold, 1)
+
+    @staticmethod
+    def _validate_airband_gain(value: Any) -> float:
+        gain = float(value)
+        if not MIN_AIRBAND_RF_GAIN_DB <= gain <= MAX_AIRBAND_RF_GAIN_DB:
+            raise ValueError("Airband RF gain must be between 0.0 and 49.6 dB.")
+        return round(gain, 1)
+
     def _persist_port_settings(self) -> None:
         with self.lock:
             payload = {
                 "receiver_location": self.receiver_location(),
                 "airband_radius_miles": self.airband_radius_miles,
+                "airband_activity_threshold_rms": self.airband_activity_threshold_rms,
+                "airband_rf_gain_db": self.airband_rf_gain_db,
+                "airband_blocked_frequencies_hz": self.airband_blocked_frequencies_hz,
                 "noaa_selection": {
                     "frequency_hz": self.noaa_frequency_hz,
                     "station": self.noaa_station,
@@ -127,6 +163,40 @@ class PiPortSettingsStore(SettingsStore):
         self.airband_radius_miles = self._validate_radius(value)
         self._persist_port_settings()
         return self.pi_location()
+
+    def airband_tuning(self) -> dict[str, Any]:
+        return {
+            "airband_activity_threshold_rms": self.airband_activity_threshold_rms,
+            "airband_rf_gain_db": self.airband_rf_gain_db,
+            "activity_metric": "audio_rms_sample",
+            "gain_units": "dB",
+            "airband_blocked_frequencies_hz": list(self.airband_blocked_frequencies_hz),
+        }
+
+    def save_airband_tuning(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if payload.get("airband_activity_threshold_rms") not in (None, ""):
+            self.airband_activity_threshold_rms = self._validate_airband_threshold(
+                payload["airband_activity_threshold_rms"]
+            )
+        if payload.get("airband_rf_gain_db") not in (None, ""):
+            self.airband_rf_gain_db = self._validate_airband_gain(payload["airband_rf_gain_db"])
+        self._persist_port_settings()
+        return self.airband_tuning()
+
+    def block_airband_frequency(self, value: Any) -> dict[str, Any]:
+        frequency_hz = int(value)
+        if frequency_hz <= 0:
+            raise ValueError("A valid Airband frequency is required.")
+        if frequency_hz not in self.airband_blocked_frequencies_hz:
+            self.airband_blocked_frequencies_hz.append(frequency_hz)
+            self.airband_blocked_frequencies_hz.sort()
+            self._persist_port_settings()
+        return self.airband_tuning()
+
+    def clear_airband_blocks(self) -> dict[str, Any]:
+        self.airband_blocked_frequencies_hz = []
+        self._persist_port_settings()
+        return self.airband_tuning()
 
     def save_noaa_selection(self, frequency_hz: int, station: str) -> None:
         self.noaa_frequency_hz = int(frequency_hz)
@@ -172,6 +242,7 @@ class AudioOperations:
         self.audio = audio
         self.lock = threading.RLock()
         self.noaa_live_active = False
+        self.airband_live_active = False
 
     def _capture_profile(self, profile: dict[str, Any], seconds: float, channel: dict[str, Any] | None = None) -> bytes:
         with self.lock:
@@ -213,16 +284,40 @@ class AudioOperations:
             self.noaa_live_active = False
             return result
 
+    def live_airband_start(self, channel: dict[str, Any], gain_db: float) -> dict[str, Any]:
+        with self.lock:
+            if self.noaa_live_active:
+                raise RuntimeError("Stop NOAA Weather before Airband live playback.")
+            if self.audio.live_is_running():
+                self.audio.stop_live()
+            profile = dict(AIRBAND_LIVE_AUDIO_PROFILE)
+            profile["frequency_hz"] = int(channel["frequency_hz"])
+            profile["rtl_fm_mode"] = "am"
+            profile["gain_db"] = float(gain_db)
+            result = self.audio._start_live_process(profile, channel)
+            self.airband_live_active = True
+            return result
+
+    def live_airband_stop(self) -> dict[str, Any]:
+        with self.lock:
+            if not self.airband_live_active:
+                return {"stopped": False, "already_stopped": True}
+            result = self.audio.stop_live()
+            self.airband_live_active = False
+            return result
+
     def capture_noaa(self, settings: PiPortSettingsStore, seconds: int) -> bytes:
         profile = dict(NOAA_PROFILE)
         profile["frequency_hz"] = settings.noaa_frequency_hz
         profile["rtl_fm_mode"] = "fm"
         return self._capture_profile(profile, seconds)
 
-    def capture_airband(self, channel: dict[str, Any], seconds: int) -> bytes:
+    def capture_airband(self, channel: dict[str, Any], seconds: float, gain_db: float | None = None) -> bytes:
         profile = dict(AIRBAND_LIVE_AUDIO_PROFILE)
         profile["frequency_hz"] = int(channel["frequency_hz"])
         profile["rtl_fm_mode"] = "am"
+        if gain_db is not None:
+            profile["gain_db"] = float(gain_db)
         return self._capture_profile(profile, seconds, channel)
 
     def survey_noaa(self, settings: PiPortSettingsStore) -> dict[str, Any]:
@@ -249,6 +344,7 @@ class AirbandScanPort:
         self.catalog = catalog
         self.lock = threading.RLock()
         self.stop_event = threading.Event()
+        self.release_hold_event = threading.Event()
         self.thread: threading.Thread | None = None
         self.state: dict[str, Any] = {
             "airband_scan_running": False,
@@ -262,7 +358,14 @@ class AirbandScanPort:
             "airband_best_candidate": None,
             "airband_scan_scope": None,
             "airband_scan_error": None,
+            "airband_hold_active": False,
+            "airband_hold_id": 0,
+            "airband_hold_channel": None,
+            "airband_hold_rms_sample": None,
+            "airband_hold_quiet_seconds": 0.0,
+            "airband_hold_release_reason": None,
         }
+        self.hold_identifier = 0
         self.last_audio: bytes | None = None
         self.best_audio: bytes | None = None
         self.best_rms = 0.0
@@ -298,7 +401,11 @@ class AirbandScanPort:
         }
 
     def _select_channels(self, scope: str) -> list[dict[str, Any]]:
-        channels = self.nearby()["channels"]
+        blocked = set(self.settings.airband_blocked_frequencies_hz)
+        channels = [
+            channel for channel in self.nearby()["channels"]
+            if int(channel.get("frequency_hz", 0)) not in blocked
+        ]
         if scope == "all" or scope == "continuous":
             return channels
         priority = [
@@ -309,7 +416,10 @@ class AirbandScanPort:
 
     def status(self) -> dict[str, Any]:
         with self.lock:
-            return dict(self.state)
+            status = dict(self.state)
+        status.update(self.settings.airband_tuning())
+        status["airband_best_rms_sample"] = round(self.best_rms, 2) if self.best_rms else None
+        return status
 
     def start(self, scope: str) -> dict[str, Any]:
         with self.lock:
@@ -319,6 +429,7 @@ class AirbandScanPort:
         if not channels:
             raise RuntimeError("No nearby Airband channels are available for scanning.")
         self.stop_event.clear()
+        self.release_hold_event.clear()
         with self.lock:
             self.state.update({
                 "airband_scan_running": True,
@@ -329,6 +440,10 @@ class AirbandScanPort:
                 "airband_last_detection": None,
                 "airband_scan_scope": scope,
                 "airband_scan_error": None,
+                "airband_hold_active": False,
+                "airband_hold_channel": None,
+                "airband_hold_quiet_seconds": 0.0,
+                "airband_hold_release_reason": None,
             })
         self.thread = threading.Thread(target=self._run, args=(channels,), daemon=True, name="pi-port-airband-scan")
         self.thread.start()
@@ -336,6 +451,8 @@ class AirbandScanPort:
 
     def stop(self) -> dict[str, Any]:
         self.stop_event.set()
+        self.release_hold_event.set()
+        self.audio_ops.live_airband_stop()
         thread = self.thread
         if thread and thread is not threading.current_thread():
             thread.join(timeout=4)
@@ -343,6 +460,78 @@ class AirbandScanPort:
             self.state["airband_scan_running"] = False
             self.state["airband_scan_state"] = "stopped"
         return {"stopped": True, **self.status()}
+
+    @staticmethod
+    def _wav_duration_seconds(wav_content: bytes) -> float:
+        with wave.open(io.BytesIO(wav_content), "rb") as wav_file:
+            return wav_file.getnframes() / float(max(1, wav_file.getframerate()))
+
+    def release_held_channel(self, block: bool) -> dict[str, Any]:
+        with self.lock:
+            channel = self.state.get("airband_hold_channel")
+            active = bool(self.state.get("airband_hold_active"))
+        if not active or not isinstance(channel, dict):
+            raise RuntimeError("No Airband channel is currently held.")
+        frequency_hz = int(channel["frequency_hz"])
+        tuning = self.settings.block_airband_frequency(frequency_hz) if block else self.settings.airband_tuning()
+        self.release_hold_event.set()
+        self.audio_ops.live_airband_stop()
+        return {
+            "released": True,
+            "action": "blocked" if block else "skipped",
+            "frequency_hz": frequency_hz,
+            **tuning,
+        }
+
+    def _hold_detected_channel(self, channel: dict[str, Any], candidate: dict[str, Any]) -> None:
+        quiet_threshold = max(MIN_AIRBAND_ACTIVITY_RMS, self.settings.airband_activity_threshold_rms * 0.70)
+        self.release_hold_event.clear()
+        with self.lock:
+            self.hold_identifier += 1
+            self.state.update({
+                "airband_scan_state": "holding",
+                "airband_hold_active": True,
+                "airband_hold_id": self.hold_identifier,
+                "airband_hold_channel": candidate["channel"],
+                "airband_hold_rms_sample": candidate["audio_rms_sample"],
+                "airband_hold_quiet_seconds": 0.0,
+                "airband_hold_release_reason": None,
+            })
+        cursor = 0
+        quiet_seconds = 0.0
+        release_reason = "quiet"
+        try:
+            self.audio_ops.live_airband_start(channel["_native"], self.settings.airband_rf_gain_db)
+            while not self.stop_event.is_set() and not self.release_hold_event.is_set():
+                chunk = self.audio_ops.audio.next_live_wav(cursor, timeout_seconds=3.0)
+                if chunk is None:
+                    break
+                cursor, wav_content = chunk
+                rms = rms_from_wav(wav_content)
+                if rms < quiet_threshold:
+                    quiet_seconds += self._wav_duration_seconds(wav_content)
+                else:
+                    quiet_seconds = 0.0
+                with self.lock:
+                    self.state["airband_hold_rms_sample"] = round(rms, 2)
+                    self.state["airband_hold_quiet_seconds"] = round(quiet_seconds, 2)
+                    self.state["airband_last_measurement_dbfs"] = round(rms, 2)
+                if quiet_seconds >= 7.0:
+                    break
+            if self.stop_event.is_set():
+                release_reason = "stopped"
+            elif self.release_hold_event.is_set():
+                release_reason = "operator"
+        finally:
+            self.audio_ops.live_airband_stop()
+            with self.lock:
+                self.state["airband_hold_active"] = False
+                self.state["airband_hold_channel"] = None
+                self.state["airband_hold_quiet_seconds"] = round(quiet_seconds, 2)
+                self.state["airband_hold_release_reason"] = release_reason
+                if not self.stop_event.is_set():
+                    self.state["airband_scan_state"] = "searching"
+            self.release_hold_event.clear()
 
     def _run(self, channels: list[dict[str, Any]]) -> None:
         try:
@@ -353,8 +542,12 @@ class AirbandScanPort:
                 for channel in channels:
                     if self.stop_event.is_set():
                         break
+                    if int(channel.get("frequency_hz", 0)) in set(self.settings.airband_blocked_frequencies_hz):
+                        continue
                     try:
-                        wav_content = self.audio_ops.capture_airband(channel["_native"], 0.5)
+                        wav_content = self.audio_ops.capture_airband(
+                            channel["_native"], 0.5, self.settings.airband_rf_gain_db
+                        )
                         rms = rms_from_wav(wav_content)
                     except Exception as exc:
                         if self.stop_event.is_set():
@@ -364,12 +557,13 @@ class AirbandScanPort:
                         time.sleep(0.1)
                         continue
                     candidate = {
-                        "channel": {k: v for k, v in channel.items() if k != "_native"},
+                        "channel": {key: value for key, value in channel.items() if key != "_native"},
                         "audio_rms_sample": round(rms, 2),
                         "rf_estimated_snr_db": None,
                         "observed_utc": int(time.time()),
-                        "audio_url": "/api/airband/scan/best_audio.wav",
+                        "audio_url": "/api/airband/scan/last_audio.wav",
                     }
+                    detected = rms >= self.settings.airband_activity_threshold_rms
                     with self.lock:
                         self.state["airband_channels_scanned"] += 1
                         self.state["airband_current_channel"] = candidate["channel"]
@@ -379,21 +573,25 @@ class AirbandScanPort:
                             self.best_rms = rms
                             self.best_audio = wav_content
                             self.state["airband_best_candidate"] = candidate
-                        if rms >= DEFAULT_AIRBAND_ACTIVITY_RMS:
+                        if detected:
                             self.last_audio = wav_content
                             self.state["airband_last_detection"] = {
                                 **candidate,
-                                "threshold_rms_sample": DEFAULT_AIRBAND_ACTIVITY_RMS,
+                                "threshold_rms_sample": self.settings.airband_activity_threshold_rms,
+                                "rf_gain_db": self.settings.airband_rf_gain_db,
                                 "audio_url": "/api/airband/scan/last_audio.wav",
                             }
-                            self.state["airband_scan_state"] = "activity_detected"
-                time.sleep(0.05)
+                    if detected and not self.stop_event.is_set():
+                        self._hold_detected_channel(channel, candidate)
+                    time.sleep(0.05)
         except Exception as exc:
             with self.lock:
                 self.state["airband_scan_error"] = str(exc)
                 self.state["airband_scan_state"] = "error"
         finally:
+            self.audio_ops.live_airband_stop()
             with self.lock:
+                self.state["airband_hold_active"] = False
                 self.state["airband_scan_running"] = False
                 if self.state["airband_scan_state"] != "error":
                     self.state["airband_scan_state"] = "stopped"
@@ -954,10 +1152,22 @@ class PiPortHandler(BaseHTTPRequestHandler):
                     self.send_json(self.normalize_pi_aircraft_payload(self.manager.query_aircraft()))
             elif request.path == "/api/settings/receiver":
                 self.send_json({"configured": True, "receiver_location": self.settings.pi_location(), "default_airband_radius_miles": DEFAULT_RADIUS_MILES})
+            elif request.path == "/api/settings/airband-scan":
+                self.send_json(self.settings.airband_tuning())
             elif request.path == "/api/airband/channels":
                 self.send_json(self.scan.nearby())
             elif request.path == "/api/airband/scan/status":
                 self.send_json({**self.port_status(), **self.scan.status()})
+            elif request.path == "/api/airband/scan/live/audio.wav":
+                after = int(query.get("from", ["0"])[0])
+                next_chunk = self.audio.next_live_wav(after)
+                if not self.scan.status().get("airband_hold_active") or next_chunk is None:
+                    self.send_response(HTTPStatus.NO_CONTENT)
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                else:
+                    sequence, content = next_chunk
+                    self.send_binary(content, "audio/wav", {"X-Source-Samples": str(max(1, sequence - after))})
             elif request.path == "/api/airband/scan/last_audio.wav":
                 if self.scan.last_audio is None:
                     self.send_json({"error": "No activity audio has been captured."}, HTTPStatus.NOT_FOUND)
@@ -975,7 +1185,7 @@ class PiPortHandler(BaseHTTPRequestHandler):
                 if channel is None:
                     self.send_json({"error": "Selected Airband frequency was not found in the FAA catalog."}, HTTPStatus.BAD_REQUEST)
                 else:
-                    self.send_binary(self.audio_ops.capture_airband(channel, seconds), "audio/wav")
+                    self.send_binary(self.audio_ops.capture_airband(channel, seconds, self.settings.airband_rf_gain_db), "audio/wav")
             elif request.path == "/api/noaa/capture.wav":
                 seconds = max(1, min(10, int(query.get("seconds", ["10"])[0])))
                 self.send_binary(self.audio_ops.capture_noaa(self.settings, seconds), "audio/wav")
@@ -1014,6 +1224,9 @@ class PiPortHandler(BaseHTTPRequestHandler):
             elif request.path == "/api/settings/airband-radius":
                 location = self.settings.save_airband_radius(self.read_json().get("airband_radius_miles"))
                 self.send_json({"saved": True, "receiver_location": location, "noaa_selection_preserved": True})
+            elif request.path == "/api/settings/airband-scan":
+                tuning = self.settings.save_airband_tuning(self.read_json())
+                self.send_json({"saved": True, **tuning})
             elif request.path == "/api/noaa/live/start":
                 if self.scan.status()["airband_scan_running"]:
                     raise RuntimeError("Stop Airband background scan before starting NOAA listening.")
@@ -1048,6 +1261,12 @@ class PiPortHandler(BaseHTTPRequestHandler):
                 self.send_json(self.scan.start(scope))
             elif request.path == "/api/airband/scan/activity/stop":
                 self.send_json(self.scan.stop())
+            elif request.path == "/api/airband/scan/activity/skip":
+                self.send_json(self.scan.release_held_channel(False))
+            elif request.path == "/api/airband/scan/activity/block":
+                self.send_json(self.scan.release_held_channel(True))
+            elif request.path == "/api/airband/scan/blocks/clear":
+                self.send_json({"cleared": True, **self.settings.clear_airband_blocks()})
             elif request.path == "/api/trails/clear":
                 self.send_json(self.trails.clear())
             elif request.path == "/api/diagnostics/airlabs/cache/clear":
