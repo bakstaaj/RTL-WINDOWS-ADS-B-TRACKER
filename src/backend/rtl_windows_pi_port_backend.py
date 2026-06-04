@@ -134,6 +134,12 @@ class PiPortSettingsStore(SettingsStore):
         self._persist_port_settings()
 
 
+    def reset_noaa_selection(self) -> None:
+        self.noaa_frequency_hz = int(NOAA_PROFILE["frequency_hz"])
+        self.noaa_station = "Selection cleared — awaiting full NOAA scan"
+        self._persist_port_settings()
+
+
 def rms_from_wav(content: bytes) -> float:
     with wave.open(io.BytesIO(content), "rb") as wav_file:
         frames = wav_file.readframes(wav_file.getnframes())
@@ -229,9 +235,9 @@ class AudioOperations:
             results.append({"frequency_hz": frequency_hz, "rms_sample": round(rms_from_wav(wav_content), 2)})
         results.sort(key=lambda row: row["rms_sample"], reverse=True)
         best = results[0]
-        station = f"AUTO SELECT — {best['frequency_hz'] / 1_000_000:.3f} MHz"
+        station = f"AUTO SELECT (ALL 7) — {best['frequency_hz'] / 1_000_000:.3f} MHz"
         settings.save_noaa_selection(int(best["frequency_hz"]), station)
-        return {"best_frequency_hz": best["frequency_hz"], "channels": results, "station": station}
+        return {"best_frequency_hz": best["frequency_hz"], "channels": results, "station": station, "scanned_frequency_count": len(results), "selection_policy": "all_seven_each_selection"}
 
 
 class AirbandScanPort:
@@ -1019,13 +1025,20 @@ class PiPortHandler(BaseHTTPRequestHandler):
             elif request.path in ("/api/noaa/auto/start", "/api/noaa/auto/rescan"):
                 if self.scan.status()["airband_scan_running"]:
                     raise RuntimeError("Stop Airband background scan before selecting NOAA.")
-                force = request.path.endswith("/rescan")
-                if force or not self.settings.noaa_station.startswith("AUTO SELECT"):
-                    survey = self.audio_ops.survey_noaa(self.settings)
-                else:
-                    survey = None
+                reset_requested = request.path.endswith("/rescan")
+                if self.audio_ops.noaa_live_active:
+                    self.audio_ops.live_noaa_stop()
+                if reset_requested:
+                    self.settings.reset_noaa_selection()
+                survey = self.audio_ops.survey_noaa(self.settings)
                 self.audio_ops.live_noaa_start(self.settings)
-                self.send_json({"started": True, "survey": survey, **self.port_status()})
+                self.send_json({
+                    "started": True,
+                    "reset_requested": reset_requested,
+                    "full_channel_scan": True,
+                    "survey": survey,
+                    **self.port_status(),
+                })
             elif request.path == "/api/airband/scan/activity/start":
                 if self.audio_ops.noaa_live_active:
                     raise RuntimeError("Stop NOAA Weather listening before starting Airband scanning.")

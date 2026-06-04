@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>RTL Pi ADS-B Tracker</title>
+<title>RTL ADS-B Tracker</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
   integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
 <style>
@@ -237,12 +237,56 @@ body { padding: 0; }
 .provider-key-row label { flex: 1; min-width: 220px; }
 .provider-test-row label { flex: 1; min-width: 160px; }
 
+
+/* Step 48: compact logically grouped menu layout */
+.menu-drawer { width: min(424px, calc(100vw - 12px)); padding: 9px; }
+.menu-section { padding: 8px; margin-bottom: 7px; }
+.menu-section h3 { margin: 0 0 5px; font-size: 14px; }
+.menu-section details { margin-top: 0; border-top: 0; padding-top: 0; }
+.menu-section > details > summary { padding: 2px 0 6px; font-size: 13px; }
+.menu-group { border-top: 1px solid var(--border); padding-top: 7px; margin-top: 5px; }
+.menu-group h4 { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 0 0 5px; }
+.menu-help { margin: 4px 0 6px; font-size: 10px; line-height: 1.25; color: var(--muted); }
+.compact-station { margin-bottom: 5px; }
+.compact-station strong { font-size: 13px; }
+.compact-station span { font-size: 10px; }
+.menu-drawer button {
+  margin: 0; padding: 4px 7px; min-height: 24px; border-radius: 4px;
+  font-size: 10.5px; line-height: 1.1;
+}
+.menu-button-row { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin: 5px 0; }
+.menu-button-row.primary-actions button { flex: 1 1 165px; }
+.menu-drawer input, .menu-drawer select {
+  margin-top: 2px; padding: 5px 6px; min-height: 27px; font-size: 11px;
+}
+.menu-drawer label, .menu-drawer .inline-label { font-size: 10px; }
+.menu-location-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin: 4px 0 6px;
+}
+.menu-location-grid .wide { grid-column: 1 / -1; }
+.menu-inline-setting { display: flex; align-items: end; gap: 4px; flex-wrap: wrap; }
+.menu-inline-setting label { flex: 1 1 104px; }
+.history-setting label { flex-basis: 155px; }
+.compact-message { margin-top: 5px; padding: 5px 6px; font-size: 10px; line-height: 1.25; }
+.menu-nested { border-top: 1px solid var(--border) !important; margin-top: 7px !important; padding-top: 6px !important; }
+.menu-nested > summary { font-size: 11px; color: var(--muted); padding: 2px 0; }
+.provider-compact { border-top: 0; margin-top: 4px; padding-top: 2px; }
+.provider-link-row { gap: 9px; margin-bottom: 5px; font-size: 10px; }
+.provider-key-row, .provider-test-row { gap: 4px; margin-top: 5px; }
+.provider-key-row label { min-width: 180px; }
+.provider-test-row label { min-width: 110px; }
+.compact-diagnostic { margin-top: 4px; padding-top: 4px; }
+.compact-diagnostic table { margin-top: 5px; }
+.compact-diagnostic th, .compact-diagnostic td { padding: 5px 4px; font-size: 10px; }
+.compact-diagnostic audio { margin-top: 5px; height: 28px; }
+.menu-drawer .badge { font-size: 9px; padding: 1px 4px; }
+
 </style>
 </head>
 <body>
 <header class="app-header">
   <button id="menuToggle" class="menu-button" type="button" aria-label="Open menu" aria-expanded="false">&#9776;</button>
-  <div class="app-title"><h1>RTL Pi ADS-B Tracker</h1></div>
+  <div class="app-title"><h1>RTL ADS-B Tracker</h1></div>
   <div class="header-stats">
     <div class="header-stat"><div class="label">Messages</div><div class="value" id="messageCount">—</div></div>
     <div class="header-stat"><div class="label">Aircraft</div><div class="value" id="aircraftCount">—</div></div>
@@ -252,69 +296,138 @@ body { padding: 0; }
 </header>
 <div id="menuBackdrop" class="menu-backdrop"></div>
 <nav id="appMenu" class="menu-drawer" aria-label="Receiver controls">
-  <div class="menu-section"><h3>Operations</h3>
-    <div class="station"><strong id="stationName">NOAA Weather</strong><span>Audio receiver and background scan controls</span></div>
-    <button id="noaaMenuToggle" type="button">Start NOAA Weather</button>
-    <button id="airbandMenuToggle" type="button">Stop Airband Background Scan</button>
-    <div id="operationsMessage" class="message warning">Airband scan starts automatically and runs silently unless real RF activity is detected. Use Diagnostics > Airband Scanner Test Mode for an audible simulated test tone.</div>
+  <section class="menu-section menu-operations" aria-label="Operations">
+    <h3>Operations</h3>
+    <div class="station compact-station"><strong id="stationName">NOAA Weather</strong><span>Audio and scan operation</span></div>
+    <div class="menu-button-row primary-actions">
+      <button id="noaaMenuToggle" type="button">Start NOAA Weather</button>
+      <button id="airbandMenuToggle" type="button">Stop Airband Scan</button>
+    </div>
+    <div id="operationsMessage" class="message warning compact-message">Airband scanning starts automatically when available. NOAA uses the shared audio receiver.</div>
     <button id="startLive" type="button" class="menu-hidden-control">Start Listening</button>
     <button id="stopLive" type="button" class="menu-hidden-control" disabled>Stop Listening</button>
     <button id="autoNoaa" type="button" class="menu-hidden-control">Scan and Listen</button>
-  </div>
-  <div class="menu-section"><details id="configurationDetails"><summary>Configuration</summary>
-    <p>Receiver location is required for nearby airband channel selection.</p>
-    <div class="settings-grid">
-      <label>Location Name<input id="locationName" type="text" placeholder="Houston Test Location"></label>
-      <label>Latitude<input id="locationLatitude" type="number" step="0.000001"></label>
-      <label>Longitude<input id="locationLongitude" type="number" step="0.000001"></label>
-      
-    </div>
-    <button id="saveLocation" type="button">Save Receiver Location</button>
-    <div class="provider-config-card">
-      <h4>Airband Scan Radius</h4>
-      <p class="small">Limits nearby AM channels selected for background Airband scanning. Changing this setting does not reset the saved NOAA Weather channel.</p>
-      <div class="provider-key-row">
-        <label>Radius Miles
-          <input id="locationRadius" type="number" min="1" max="500" value="25" step="1">
-        </label>
-        <button id="saveAirbandRadius" type="button">Apply Scan Radius</button>
+  </section>
+
+  <section class="menu-section">
+    <details id="configurationDetails" open>
+      <summary>Configuration</summary>
+
+      <div class="menu-group">
+        <h4>Receiver Location</h4>
+        <div class="settings-grid menu-location-grid">
+          <label class="wide">Name<input id="locationName" type="text" placeholder="Receiver Location"></label>
+          <label>Latitude<input id="locationLatitude" type="number" step="0.000001"></label>
+          <label>Longitude<input id="locationLongitude" type="number" step="0.000001"></label>
+        </div>
+        <div class="menu-button-row">
+          <button id="saveLocation" type="button">Save Location</button>
+          <button id="pickLocationOnMap" type="button">Pick on Map</button>
+          <button id="cancelLocationPick" class="stop" type="button" disabled>Cancel</button>
+        </div>
+        <div id="locationMessage" class="message warning compact-message">Loading receiver location…</div>
       </div>
-      <div id="airbandRadiusMessage" class="message">Current Airband radius will be loaded from the saved receiver location.</div>
-    </div>
-      <button id="rescanNoaaChannel" type="button">Rescan NOAA Channel</button>
-      <div class="provider-config-card">
-        <h4>Aircraft Route Lookup — AirLabs</h4>
-        <div class="provider-link-row">
-          <a href="https://airlabs.co/account" target="_blank" rel="noopener noreferrer">Manage AirLabs API Key</a>
-          <a href="https://airlabs.co/docs/flight" target="_blank" rel="noopener noreferrer">Flight API Documentation</a>
-        </div>
-        <p class="small">Provides airline-flight From/To lookup. The key is stored only on this Windows receiver. Enter or update it only over your trusted USB/private network.</p>
-        <div class="provider-key-row">
-          <label>AirLabs API Key
-            <input id="airlabsApiKey" type="password" autocomplete="new-password" placeholder="Paste AirLabs API key">
+
+      <div class="menu-group">
+        <h4>Scanning &amp; Audio</h4>
+        <div class="menu-inline-setting">
+          <label>Airband Radius (mi)
+            <input id="locationRadius" type="number" min="1" max="500" value="25" step="1">
           </label>
-          <button id="saveAirlabsKey" type="button">Save / Update Key</button>
-          <button id="clearAirlabsKey" class="stop" type="button">Clear Key</button>
+          <button id="saveAirbandRadius" type="button">Apply Radius</button>
+          <button id="rescanNoaaChannel" type="button">Reset &amp; Rescan NOAA</button>
         </div>
-        <div class="provider-test-row">
-          <label>Test Active Callsign
-            <input id="airlabsTestFlight" type="text" placeholder="Example: UAL1234">
-          </label>
-          <button id="testAirlabsKey" type="button">Test Route Lookup</button>
-          <button id="clearAirlabsRouteCache" class="stop" type="button">Clear Route Cache</button>
-        </div>
-        <div id="airlabsMessage" class="message">AirLabs configuration status loading…</div>
+        <div id="airbandRadiusMessage" class="message compact-message">Current Airband radius will be loaded from the saved receiver location.</div>
       </div>
-      <button id="pickLocationOnMap" type="button">Pick Location on Map</button>
-      <button id="cancelLocationPick" class="stop" type="button" disabled>Cancel Map Pick</button><div id="locationMessage" class="message warning">Loading receiver location…</div>
-    <div class="diagnostic-block"><label class="inline-label">Browser Trail Retention<select id="trailRetention"><option value="15">15 minutes</option><option value="60" selected>1 hour</option><option value="240">4 hours</option><option value="0">Until cleared</option></select></label><button id="erasePiTrails" class="stop" type="button">Erase History</button></div>
-  </details></div>
-  <div class="menu-section"><details><summary>Diagnostics</summary>
-    <div class="diagnostic-block"><h3>NOAA Audio Tests</h3><button id="capture10" type="button">Diagnostic 10-sec Capture</button><audio id="audioPlayer" controls preload="none"></audio><div id="audioMessage" class="message">Ready for NOAA diagnostics.</div><div id="surveyResult" class="message">NOAA start uses automatic strongest-channel selection.</div></div>
-    <div class="diagnostic-block"><h3>Airband AM Diagnostics</h3><button id="loadAirbandChannels" type="button">Load Nearby Channels</button><div id="airbandListMessage" class="message">No channels loaded.</div><table><thead><tr><th>MHz</th><th>Airport</th><th>Use</th><th>Miles</th><th>Test</th></tr></thead><tbody id="airbandRows"><tr><td colspan="5" class="empty">No channels loaded.</td></tr></tbody></table><audio id="airbandPlayer" controls preload="none"></audio><div id="airbandAudioMessage" class="message">Live AM reception remains unvalidated at this antenna/location.</div></div>
-    <div class="diagnostic-block"><h3>Experimental Airband Scan Status</h3><label class="inline-label">Scope<select id="airbandScanScope"><option value="continuous">Continuous Broadcasts</option><option value="priority" selected>Priority Voice + Broadcasts</option><option value="all">All Nearby Channels</option></select></label><button id="activityScanStart" type="button" class="menu-hidden-control">Start Experimental Scan</button><button id="activityScanStop" type="button" class="menu-hidden-control">Stop Experimental Scan</button><div id="airbandScanStatus" class="message warning">Background airband scan status loading…</div></div>
-    <div class="diagnostic-block"><div class="mode-title"><h3>Airband Scanner Test Mode</h3><span class="badge simulated">Simulated</span></div><p>Validates scan, seven-second silence resume, Hold and Skip without claiming received RF traffic.</p><button id="airbandTestStart" type="button">Start Test Scan</button><button id="airbandTestStop" class="stop" type="button" disabled>Stop</button><button id="airbandTestHold" type="button" disabled>Hold</button><button id="airbandTestSkip" type="button" disabled>Skip</button><button id="airbandTestResume" type="button" disabled>Resume</button><div id="airbandTestStatus" class="message warning">SIMULATED: Test scanner idle.</div><audio id="airbandTestPlayer" controls preload="none"></audio></div>
-  </details></div>
+
+      <div class="menu-group">
+        <h4>Map History</h4>
+        <div class="menu-inline-setting history-setting">
+          <label>Browser Trails
+            <select id="trailRetention"><option value="15">15 minutes</option><option value="60" selected>1 hour</option><option value="240">4 hours</option><option value="0">Until cleared</option></select>
+          </label>
+          <button id="erasePiTrails" class="stop" type="button">Erase History</button>
+        </div>
+      </div>
+
+      <details class="menu-nested">
+        <summary>Aircraft Route Lookup — AirLabs</summary>
+        <div class="menu-group provider-compact">
+          <div class="provider-link-row">
+            <a href="https://airlabs.co/account" target="_blank" rel="noopener noreferrer">Manage Key</a>
+            <a href="https://airlabs.co/docs/flight" target="_blank" rel="noopener noreferrer">API Documentation</a>
+          </div>
+          <p class="menu-help">From/To lookup. The key stays only on this Windows receiver.</p>
+          <div class="provider-key-row">
+            <label>API Key<input id="airlabsApiKey" type="password" autocomplete="new-password" placeholder="Paste AirLabs API key"></label>
+            <button id="saveAirlabsKey" type="button">Save Key</button>
+            <button id="clearAirlabsKey" class="stop" type="button">Clear</button>
+          </div>
+          <div class="provider-test-row">
+            <label>Test Callsign<input id="airlabsTestFlight" type="text" placeholder="UAL1234"></label>
+            <button id="testAirlabsKey" type="button">Lookup</button>
+            <button id="clearAirlabsRouteCache" class="stop" type="button">Clear Cache</button>
+          </div>
+          <div id="airlabsMessage" class="message compact-message">AirLabs configuration status loading…</div>
+        </div>
+      </details>
+    </details>
+  </section>
+
+  <section class="menu-section">
+    <details id="diagnosticsDetails">
+      <summary>Diagnostics</summary>
+
+      <details class="menu-nested">
+        <summary>NOAA Audio Test</summary>
+        <div class="diagnostic-block compact-diagnostic">
+          <button id="capture10" type="button">Capture 10 sec</button>
+          <audio id="audioPlayer" controls preload="none"></audio>
+          <div id="audioMessage" class="message compact-message">Ready for NOAA diagnostics.</div>
+          <div id="surveyResult" class="message compact-message">NOAA Start and Reset &amp; Rescan measure all seven channels before selecting the strongest current channel.</div>
+        </div>
+      </details>
+
+      <details class="menu-nested">
+        <summary>Airband AM Test</summary>
+        <div class="diagnostic-block compact-diagnostic">
+          <button id="loadAirbandChannels" type="button">Load Nearby Channels</button>
+          <div id="airbandListMessage" class="message compact-message">No channels loaded.</div>
+          <table><thead><tr><th>MHz</th><th>Airport</th><th>Use</th><th>Miles</th><th>Test</th></tr></thead><tbody id="airbandRows"><tr><td colspan="5" class="empty">No channels loaded.</td></tr></tbody></table>
+          <audio id="airbandPlayer" controls preload="none"></audio>
+          <div id="airbandAudioMessage" class="message compact-message">Ready for Airband AM diagnostics.</div>
+        </div>
+      </details>
+
+      <details class="menu-nested">
+        <summary>Airband Scan Status</summary>
+        <div class="diagnostic-block compact-diagnostic">
+          <div class="menu-inline-setting">
+            <label>Scope<select id="airbandScanScope"><option value="continuous">Continuous Broadcasts</option><option value="priority" selected>Priority Voice + Broadcasts</option><option value="all">All Nearby Channels</option></select></label>
+          </div>
+          <button id="activityScanStart" type="button" class="menu-hidden-control">Start Experimental Scan</button>
+          <button id="activityScanStop" type="button" class="menu-hidden-control">Stop Experimental Scan</button>
+          <div id="airbandScanStatus" class="message warning compact-message">Background airband scan status loading…</div>
+        </div>
+      </details>
+
+      <details class="menu-nested">
+        <summary>Scanner Test Mode <span class="badge simulated">Simulated</span></summary>
+        <div class="diagnostic-block compact-diagnostic">
+          <p class="menu-help">Tests hold/skip/resume behavior without claiming received RF traffic.</p>
+          <div class="menu-button-row">
+            <button id="airbandTestStart" type="button">Start</button>
+            <button id="airbandTestStop" class="stop" type="button" disabled>Stop</button>
+            <button id="airbandTestHold" type="button" disabled>Hold</button>
+            <button id="airbandTestSkip" type="button" disabled>Skip</button>
+            <button id="airbandTestResume" type="button" disabled>Resume</button>
+          </div>
+          <div id="airbandTestStatus" class="message warning compact-message">SIMULATED: Test scanner idle.</div>
+          <audio id="airbandTestPlayer" controls preload="none"></audio>
+        </div>
+      </details>
+    </details>
+  </section>
 </nav>
 <main class="focus-layout">
   <section class="map-panel"><div class="map-toolbar"><button id="fitAircraftMap" type="button">Fit Aircraft</button><button id="centerReceiverMap" type="button">Center Receiver</button><button id="clearAircraftTrails" type="button">Clear Display</button><button id="loadPiTrails" type="button">Restore History</button><div id="mapMessage" class="message">Waiting for aircraft positions from readsb.</div>
