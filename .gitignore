@@ -32,3 +32,13 @@ Thumbs.db
 __pycache__/
 *.py[cod]
 .pytest_cache/
+
+# RTL-Windows Pi UI port local runtime/private data
+/runtime/service/
+/runtime/logs/
+/runtime/settings/application_settings.json
+/runtime/settings/faa_airband_catalog.json
+/runtime/settings/airlabs_api.json
+/runtime/settings/airlabs_route_cache.json
+/runtime/settings/aircraft_trails_history.json
+/runtime/settings/aircraft_trails_control.json
