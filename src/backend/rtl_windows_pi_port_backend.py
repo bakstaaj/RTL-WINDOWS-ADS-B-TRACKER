@@ -24,6 +24,7 @@ import csv
 import io
 import json
 import logging
+import os
 from logging.handlers import RotatingFileHandler
 import math
 import mimetypes
@@ -1919,7 +1920,13 @@ def main() -> int:
     parser.add_argument("--foreground-log", action="store_true", help="Also emit diagnostics to the terminal.")
     args = parser.parse_args()
 
-    root = Path(__file__).resolve().parents[2]
+    # Step 86: native Windows service runtime paths.
+    root = Path(
+        os.environ.get("RTL_ADSB_TRACKER_ROOT", str(Path(__file__).resolve().parents[2]))
+    ).resolve()
+    runtime_root = Path(
+        os.environ.get("RTL_ADSB_TRACKER_RUNTIME", str(root / "runtime"))
+    ).resolve()
     log_path = Path(args.log_file) if args.log_file else root / "runtime" / "logs" / "pi_port_backend.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     level_name = "DEBUG" if args.verbose else args.log_level
@@ -1940,9 +1947,9 @@ def main() -> int:
         console_handler.setFormatter(formatter)
         logger.addHandler(console_handler)
     LOG.info("Diagnostic log file: %s; level=%s", log_path, level_name)
-    settings_path = Path(args.settings_file) if args.settings_file else root / "runtime" / "settings" / "application_settings.json"
+    settings_path = Path(args.settings_file) if args.settings_file else runtime_root / "settings" / "application_settings.json"
     settings = PiPortSettingsStore(settings_path)
-    catalog_path = Path(args.airband_catalog_file) if args.airband_catalog_file else root / "runtime" / "settings" / "faa_airband_catalog.json"
+    catalog_path = Path(args.airband_catalog_file) if args.airband_catalog_file else runtime_root / "settings" / "faa_airband_catalog.json"
     catalog = AirbandCatalog(catalog_path)
     airlabs = AirLabsIntegration(settings_path.parent)
     manager = DecoderManager(root, args.dump_http_port, settings)
