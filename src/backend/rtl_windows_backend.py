@@ -18,6 +18,7 @@ import argparse
 import io
 import json
 import logging
+import os
 import mimetypes
 import math
 import shutil
@@ -62,7 +63,10 @@ AIRBAND_LIVE_AUDIO_PROFILE = {
 
 
 def windows_path(path: Path) -> str:
-    """Convert an MSYS path to a Windows path for native Windows executables."""
+    # Step 86: native Windows paths when running under the packaged service.
+    # MSYS2 development still uses cygpath; Windows SCM service processes do not.
+    if os.name == "nt":
+        return str(path.resolve())
     cygpath = shutil.which("cygpath")
     if not cygpath:
         raise RuntimeError("cygpath is required when running this backend from MSYS2.")
@@ -143,7 +147,9 @@ class DecoderManager:
         self.probe = root / "dist" / "native-windows" / "rtl_dual_device_probe.exe"
         self.dump1090 = root / "dist" / "third_party" / "dump1090" / "dump1090.exe"
         self.airport_db = root / "dist" / "third_party" / "dump1090" / "airport-codes.csv"
-        self.runtime_dir = root / "runtime" / "settings"
+        self.runtime_dir = Path(
+            os.environ.get("RTL_ADSB_TRACKER_RUNTIME", str(root / "runtime"))
+        ).resolve() / "settings"
         self.config = self.runtime_dir / "dump1090_backend_runtime.cfg"
         self.log_path = self.runtime_dir / "dump1090_backend.log"
         self.process: subprocess.Popen[str] | None = None
@@ -335,7 +341,7 @@ class AudioManager:
     def __init__(self, decoder: DecoderManager, record_seconds: int) -> None:
         self.decoder = decoder
         self.record_seconds = max(3, int(record_seconds))
-        self.runtime_dir = decoder.root / "runtime" / "settings" / "audio"
+        self.runtime_dir = decoder.runtime_dir / "audio"
         self.raw_path = self.runtime_dir / "latest_noaa.raw"
         self.wav_path = self.runtime_dir / "latest_noaa.wav"
         self.log_path = self.runtime_dir / "latest_noaa_rtl_fm.log"
