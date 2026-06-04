@@ -464,7 +464,7 @@ body { padding: 0; }
           <button id="capture10" type="button">Capture 10 sec</button>
           <audio id="audioPlayer" controls preload="none"></audio>
           <div id="audioMessage" class="message compact-message">Ready for NOAA diagnostics.</div>
-          <div id="surveyResult" class="message compact-message">NOAA Start and Reset &amp; Rescan use fast carrier search followed by brief clear-audio validation.</div>
+          <div id="surveyResult" class="message compact-message">NOAA Start uses the saved verified channel when the receiver location is unchanged. Reset &amp; Rescan runs fast carrier search followed by clear-audio validation.</div>
         </div>
       </details>
 
@@ -2206,7 +2206,7 @@ async function autoNoaa(forceRescan = false) {
   const noaaEndpoint = forceRescan ? '/api/noaa/auto/rescan' : '/api/noaa/auto/start';
   setMessage(
     'surveyResult',
-    forceRescan ? 'Fast scanning all seven NOAA channels for the strongest carrier…' : 'Fast scanning all seven NOAA channels before starting audio…',
+    forceRescan ? 'Rescanning NOAA channels and validating clear weather audio…' : 'Starting the saved NOAA channel, or rescanning if the receiver location changed…',
     'warning'
   );
 
@@ -2226,6 +2226,7 @@ async function autoNoaa(forceRescan = false) {
     const audioEvidence = status.survey && status.survey.selected_audio_quality_db != null
       ? ` · audio quality ${Number(status.survey.selected_audio_quality_db).toFixed(1)} dB`
       : '';
+    const savedChannelEvidence = status.saved_channel_reused ? ' · saved channel reused' : '';
     setMessage('surveyResult', `Selected ${selected} MHz${carrierEvidence}${audioEvidence} and started live listening.`, 'good');
     setMessage('audioMessage', `NOAA listening active on ${selected} MHz.`, 'good');
     pumpLiveAudio();
@@ -2985,5 +2986,308 @@ document.addEventListener('DOMContentLoaded', () => {
 })();
 </script>
 
+
+<style>
+/* Step 80: NOAA browser diagnostic trace recorder */
+.noaa-debug-tools { display:flex; flex-wrap:wrap; align-items:center; gap:5px; margin:6px 0 8px; padding:6px; border:1px solid #53647a; border-radius:5px; background:rgba(19,30,45,.7); font-size:11px; }
+.noaa-debug-tools button { padding:3px 7px; font-size:11px; }
+.noaa-debug-state { color:#c9d8e8; min-width:112px; }
+.noaa-debug-state.recording { color:#ffca4b; font-weight:700; }
+</style>
+<script>
+/* Step 80: NOAA browser diagnostic trace recorder */
+(() => {
+  const KEY = 'rtl.adsb.noaa.debug.trace.v1';
+  const MAX = 1200;
+  let enabled = false, events = [], seq = 0, chunkSeq = 0, lastState = '';
+  let watchedMedia = null;
+  const watchedContexts = new WeakSet();
+  const originalFetch = window.fetch.bind(window);
+  const at = () => new Date().toISOString();
+  const get = id => document.getElementById(id);
+  const cleanError = e => e ? {name:String(e.name || 'Error'), message:String(e.message || e), stack:String(e.stack || '').slice(0,800)} : null;
+  function cloneSafe(value) { try { return JSON.parse(JSON.stringify(value)); } catch (_) { return String(value); } }
+  function displayState() {
+    const node = get('noaaDebugState');
+    if (!node) return;
+    node.textContent = enabled ? `Recording · ${events.length} events` : `${events.length} events saved`;
+    node.classList.toggle('recording', enabled);
+  }
+  function save() { try { localStorage.setItem(KEY, JSON.stringify(events)); } catch (_) {} }
+  function log(type, data = {}) {
+    if (!enabled && type !== 'trace.begin') return;
+    events.push({seq: ++seq, at: at(), type, data: cloneSafe(data)});
+    if (events.length > MAX) events.splice(0, events.length - MAX);
+    save(); displayState();
+    console.debug('[NOAA TRACE]', type, data);
+  }
+  function contextState(ctx) {
+    return ctx ? {state:ctx.state, time:Number(ctx.currentTime || 0).toFixed(3), sampleRate:ctx.sampleRate} : null;
+  }
+  function mediaState(media) {
+    return media ? {paused:media.paused, ended:media.ended, muted:media.muted, volume:media.volume, currentTime:Number(media.currentTime || 0).toFixed(3), readyState:media.readyState, networkState:media.networkState, error:media.error ? media.error.code : null} : null;
+  }
+  function watchRuntimeObjects() {
+    let media = null, liveCtx = null, airCtx = null;
+    try {
+      media = typeof noaaHtmlAudioElement === 'undefined' ? null : noaaHtmlAudioElement;
+      liveCtx = typeof liveAudioContext === 'undefined' ? null : liveAudioContext;
+      airCtx = typeof airbandAudioContext === 'undefined' ? null : airbandAudioContext;
+    } catch (_) {}
+    if (media && media !== watchedMedia) {
+      watchedMedia = media;
+      log('media.attach', mediaState(media));
+      ['loadstart','loadeddata','canplay','play','playing','pause','waiting','stalled','ended','emptied','error','volumechange'].forEach(name => {
+        media.addEventListener(name, () => log(`media.${name}`, mediaState(media)));
+      });
+    }
+    [['live', liveCtx], ['airband', airCtx]].forEach(([label, ctx]) => {
+      if (!ctx || watchedContexts.has(ctx)) return;
+      watchedContexts.add(ctx);
+      log('context.attach', {label, ...contextState(ctx)});
+      ctx.addEventListener('statechange', () => log('context.statechange', {label, ...contextState(ctx)}));
+    });
+  }
+  function snapshot(reason) {
+    if (!enabled) return;
+    const state = {reason};
+    try {
+      state.liveListening = typeof liveListening === 'undefined' ? 'missing' : Boolean(liveListening);
+      state.liveNextCursor = typeof liveNextCursor === 'undefined' ? 'missing' : liveNextCursor;
+      state.liveNextPlayTime = typeof liveNextPlayTime === 'undefined' ? 'missing' : liveNextPlayTime;
+      state.chunksScheduled = typeof noaaPlaybackChunksScheduled === 'undefined' ? 'missing' : noaaPlaybackChunksScheduled;
+      state.lastChunkRms = typeof noaaPlaybackLastChunkRms === 'undefined' ? 'missing' : noaaPlaybackLastChunkRms;
+      state.usesAirbandContext = typeof noaaAudioUsesAirbandContext === 'undefined' ? 'missing' : Boolean(noaaAudioUsesAirbandContext);
+      state.liveContext = contextState(typeof liveAudioContext === 'undefined' ? null : liveAudioContext);
+      state.airbandContext = contextState(typeof airbandAudioContext === 'undefined' ? null : airbandAudioContext);
+      state.htmlPlayer = mediaState(typeof noaaHtmlAudioElement === 'undefined' ? null : noaaHtmlAudioElement);
+      state.htmlQueueLength = typeof noaaHtmlAudioQueue === 'undefined' ? 'missing' : noaaHtmlAudioQueue.length;
+    } catch (error) { state.error = cleanError(error); }
+    const encoded = JSON.stringify(state);
+    if (encoded !== lastState) { lastState = encoded; log('app.state', state); }
+    watchRuntimeObjects();
+  }
+  function wavSample(buffer) {
+    if (!buffer || buffer.byteLength < 46) return {bytes:buffer ? buffer.byteLength : 0};
+    try {
+      const view = new DataView(buffer);
+      let sum = 0, count = 0, peak = 0;
+      for (let offset = 44; offset + 1 < buffer.byteLength; offset += 16) {
+        const value = view.getInt16(offset, true);
+        sum += value * value; peak = Math.max(peak, Math.abs(value)); count += 1;
+      }
+      return {bytes:buffer.byteLength, sampledRms:count ? Math.sqrt(sum / count).toFixed(2) : '0', sampledPeak:peak};
+    } catch (error) { return {bytes:buffer.byteLength, error:String(error.message || error)}; }
+  }
+  function statusSubset(path, value) {
+    if (!value || typeof value !== 'object') return value;
+    if (path === '/api/status') return {audio_mode:value.audio_mode, live_audio_running:value.live_audio_running, noaa_frequency_hz:value.noaa_frequency_hz, noaa_station:value.noaa_station, audio_busy:value.audio_busy, noaa_live_active:value.noaa_live_active};
+    return value;
+  }
+  window.fetch = async function(resource, options) {
+    const raw = typeof resource === 'string' ? resource : (resource && resource.url ? resource.url : String(resource));
+    let u;
+    try { u = new URL(raw, location.href); } catch (_) { return originalFetch(resource, options); }
+    const path = u.pathname;
+    const interesting = path === '/api/status' || path.startsWith('/api/noaa/') || path.startsWith('/api/airband/scan/');
+    if (!enabled || !interesting) return originalFetch(resource, options);
+    const method = String((options && options.method) || (resource && resource.method) || 'GET').toUpperCase();
+    const begun = performance.now();
+    log('fetch.begin', {method, path, query:u.search});
+    try {
+      const response = await originalFetch(resource, options);
+      const meta = {method, path, status:response.status, elapsedMs:Math.round(performance.now() - begun)};
+      if (path === '/api/noaa/live/audio.wav') {
+        const index = ++chunkSeq;
+        response.clone().arrayBuffer().then(data => log('fetch.noaaAudioChunk', {...meta, chunk:index, sourceSamples:response.headers.get('X-Source-Samples'), ...wavSample(data)}))
+          .catch(error => log('fetch.noaaAudioChunk.error', {...meta, error:cleanError(error)}));
+      } else {
+        response.clone().json().then(data => log('fetch.response', {...meta, response:statusSubset(path, data)}))
+          .catch(error => log('fetch.response.nonJson', {...meta, error:cleanError(error)}));
+      }
+      return response;
+    } catch (error) {
+      log('fetch.error', {method, path, elapsedMs:Math.round(performance.now() - begun), error:cleanError(error)});
+      throw error;
+    }
+  };
+  function observeBufferScheduling() {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx || !Ctx.prototype || Ctx.prototype.__noaaTraceOriginalCreate) return;
+    const originalCreate = Ctx.prototype.createBufferSource;
+    Ctx.prototype.__noaaTraceOriginalCreate = originalCreate;
+    Ctx.prototype.createBufferSource = function(...args) {
+      const ctx = this;
+      const source = originalCreate.apply(ctx, args);
+      const originalStart = source.start.bind(source);
+      source.start = function(when, ...remaining) {
+        if (enabled) log('webaudio.buffer.start', {context:contextState(ctx), scheduledAt:typeof when === 'number' ? Number(when).toFixed(3) : 'immediate', duration:source.buffer ? Number(source.buffer.duration).toFixed(3) : null});
+        return originalStart(when, ...remaining);
+      };
+      return source;
+    };
+  }
+  /* Step 82: locate Diagnostics host for NOAA trace controls */
+  function findNoaaDiagnosticsHost(anchor) {
+    const preferredIds = [
+      'diagnosticsContent', 'diagnosticsPanel', 'diagnosticPanel',
+      'diagnosticsSection', 'diagnostics', 'diagnosticContent'
+    ];
+    for (const id of preferredIds) {
+      const candidate = get(id);
+      if (candidate) return candidate;
+    }
+
+    const labels = Array.from(document.querySelectorAll(
+      'summary, legend, h1, h2, h3, h4, .section-title, .menu-title, .panel-title, .card-title'
+    ));
+    for (const label of labels) {
+      const value = String(label.textContent || '').trim();
+      if (!/^diagnostics?(?:\s|$)/i.test(value)) continue;
+      const details = label.closest('details');
+      if (details) return details;
+      const container = label.closest(
+        'fieldset, section, .config-section, .menu-section, .settings-section, .panel, .card'
+      );
+      if (container) return container;
+      if (label.parentElement) return label.parentElement;
+    }
+
+    const menu = anchor.closest(
+      'details, .config-panel, .operations-panel, .menu-panel, .settings-panel'
+    ) || anchor.parentElement || document.body;
+    let fallback = get('noaaDiagnosticsFallback');
+    if (!fallback) {
+      fallback = document.createElement('details');
+      fallback.id = 'noaaDiagnosticsFallback';
+      fallback.className = 'menu-section';
+      fallback.innerHTML = '<summary>Diagnostics</summary>';
+      menu.appendChild(fallback);
+    }
+    return fallback;
+  }
+
+  function installControls() {
+    const anchor = get('noaaMenuToggle');
+    if (!anchor || get('noaaDebugTools')) return;
+    const tools = document.createElement('div');
+    tools.id = 'noaaDebugTools';
+    tools.className = 'noaa-debug-tools';
+    tools.innerHTML = '<button type="button" id="noaaDebugBegin">Begin NOAA Trace</button><button type="button" id="noaaDebugDownload">Download Log</button><button type="button" id="noaaDebugClear">Clear</button><span id="noaaDebugState" class="noaa-debug-state">0 events saved</span>';
+    findNoaaDiagnosticsHost(anchor).appendChild(tools);
+    get('noaaDebugBegin').addEventListener('click', () => {
+      events = []; seq = 0; chunkSeq = 0; lastState = ''; enabled = true;
+      log('trace.begin', {userAgent:navigator.userAgent, location:location.href});
+      snapshot('begin');
+    });
+    get('noaaDebugClear').addEventListener('click', () => {
+      enabled = false; events = []; seq = 0; chunkSeq = 0; lastState = '';
+      try { localStorage.removeItem(KEY); } catch (_) {}
+      displayState();
+    });
+    get('noaaDebugDownload').addEventListener('click', () => {
+      snapshot('download');
+      const blob = new Blob([JSON.stringify({generatedAt:at(), eventCount:events.length, note:'Browser NOAA playback trace only; no keys intentionally recorded.', events}, null, 2)], {type:'application/json'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `RTL-ADS-B-Tracker_NOAA_Browser_Trace_${at().replace(/[:.]/g, '-')}.json`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    });
+    displayState();
+  }
+  function initialize() {
+    installControls();
+    observeBufferScheduling();
+    try {
+      const stored = localStorage.getItem(KEY);
+      if (stored) events = JSON.parse(stored) || [];
+      seq = events.reduce((n, item) => Math.max(n, Number(item.seq || 0)), 0);
+    } catch (_) {}
+    displayState();
+    document.addEventListener('click', event => {
+      if (!enabled) return;
+      const button = event.target && event.target.closest ? event.target.closest('button') : null;
+      if (!button) return;
+      const label = String(button.textContent || '').trim();
+      if (/NOAA|Airband|Reconnect|Scanner|Stop/i.test(label)) log('ui.button', {id:button.id || null, label});
+    }, true);
+    window.addEventListener('error', event => log('window.error', {message:event.message, source:event.filename, line:event.lineno}));
+    window.addEventListener('unhandledrejection', event => log('window.unhandledrejection', {error:cleanError(event.reason)}));
+    setInterval(() => snapshot('interval'), 400);
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initialize);
+  else initialize();
+})();
+</script>
+
+
+<script>
+/* Step 81: start NOAA chunk pump when live state has no first request */
+(() => {
+  let activeSinceMs = 0;
+  let lastKickMs = 0;
+  let kickInFlight = false;
+  let reportedKick = false;
+
+  function noaaLiveNeedsFirstChunk() {
+    try {
+      return typeof liveListening !== 'undefined' && liveListening === true &&
+        typeof liveAudioContext !== 'undefined' && Boolean(liveAudioContext) &&
+        typeof noaaPlaybackChunksScheduled !== 'undefined' && Number(noaaPlaybackChunksScheduled) === 0 &&
+        typeof liveNextCursor !== 'undefined' && Number(liveNextCursor) === 0;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  async function startMissingNoaaPump() {
+    if (kickInFlight || !noaaLiveNeedsFirstChunk()) return;
+    kickInFlight = true;
+    lastKickMs = performance.now();
+    try {
+      // The existing stream scheduler handles fetch, decode, queue depth and
+      // all subsequent polling. This call only starts its missing first cycle.
+      if (typeof liveNextPlayTime !== 'undefined' && liveAudioContext) {
+        liveNextPlayTime = liveAudioContext.currentTime + 0.06;
+      }
+      if (!reportedKick && typeof setMessage === 'function') {
+        setMessage('audioMessage', 'NOAA stream is live; starting browser audio feed…', '');
+        reportedKick = true;
+      }
+      await pumpLiveAudio();
+    } catch (error) {
+      console.error('NOAA playback bootstrap failed', error);
+      if (typeof setMessage === 'function') {
+        setMessage('audioMessage', `NOAA playback bootstrap failed: ${error.message || error}`, 'error');
+      }
+    } finally {
+      kickInFlight = false;
+    }
+  }
+
+  window.setInterval(() => {
+    if (!noaaLiveNeedsFirstChunk()) {
+      activeSinceMs = 0;
+      lastKickMs = 0;
+      reportedKick = false;
+      return;
+    }
+    const now = performance.now();
+    if (!activeSinceMs) activeSinceMs = now;
+    // Normal startup gets a brief opportunity to start its own first chunk.
+    // Intervention occurs only for the traced stall condition.
+    if (now - activeSinceMs >= 750 && (!lastKickMs || now - lastKickMs >= 1000)) {
+      startMissingNoaaPump();
+    }
+  }, 125);
+})();
+</script>
+
+
+<script>
+/* Step 83: saved NOAA channel reused until location change or manual rescan */
+</script>
 </body>
 </html>

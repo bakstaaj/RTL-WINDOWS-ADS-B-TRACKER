@@ -97,6 +97,7 @@ class PiPortSettingsStore(SettingsStore):
         self.airband_blocked_frequencies_hz: list[int] = []
         self.noaa_frequency_hz = int(NOAA_PROFILE["frequency_hz"])
         self.noaa_station = f"Configured NOAA — {self.noaa_frequency_hz / 1_000_000:.3f} MHz"
+        self.noaa_selection_location_key: str | None = None
         super().__init__(path)
         if path.exists():
             try:
@@ -128,6 +129,9 @@ class PiPortSettingsStore(SettingsStore):
                 if isinstance(selection, dict) and int(selection.get("frequency_hz", 0)) in NOAA_FREQUENCIES:
                     self.noaa_frequency_hz = int(selection["frequency_hz"])
                     self.noaa_station = str(selection.get("station") or self.noaa_station)
+                    self.noaa_selection_location_key = (
+                        str(selection.get("receiver_location_key") or "").strip() or None
+                    )
             except Exception as exc:
                 LOG.warning("Unable to read Pi-port extended settings: %s", exc)
 
@@ -173,6 +177,27 @@ class PiPortSettingsStore(SettingsStore):
             raise ValueError("Live Airband squelch must be between 0 and 5000 RMS.")
         return round(threshold / AIRBAND_PLAYBACK_SQUELCH_STEP_RMS) * AIRBAND_PLAYBACK_SQUELCH_STEP_RMS
 
+    def noaa_location_key(self) -> str:
+        # Step 83: bind verified NOAA selection to receiver coordinates.
+        location = self.receiver_location()
+        return f"{float(location['latitude']):.6f},{float(location['longitude']):.6f}"
+
+    def can_reuse_noaa_selection(self) -> bool:
+        return (
+            self.noaa_frequency_hz in NOAA_FREQUENCIES
+            and bool(self.noaa_selection_location_key)
+            and self.noaa_selection_location_key == self.noaa_location_key()
+        )
+
+    def noaa_selection_rescan_reason(self) -> str | None:
+        if not self.noaa_selection_location_key:
+            return "no_verified_channel_for_current_location"
+        if self.noaa_selection_location_key != self.noaa_location_key():
+            return "receiver_location_changed"
+        if self.noaa_frequency_hz not in NOAA_FREQUENCIES:
+            return "saved_channel_invalid"
+        return None
+
     def _persist_port_settings(self) -> None:
         with self.lock:
             payload = {
@@ -187,6 +212,7 @@ class PiPortSettingsStore(SettingsStore):
                 "noaa_selection": {
                     "frequency_hz": self.noaa_frequency_hz,
                     "station": self.noaa_station,
+                    "receiver_location_key": self.noaa_selection_location_key,
                 },
             }
             self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -204,6 +230,7 @@ class PiPortSettingsStore(SettingsStore):
         }
 
     def save_pi_location(self, payload: dict[str, Any]) -> dict[str, Any]:
+        previous_key = self.noaa_location_key()
         native = {
             "label": payload.get("name", payload.get("label", "Receiver")),
             "latitude": payload.get("latitude"),
@@ -212,8 +239,17 @@ class PiPortSettingsStore(SettingsStore):
         self.update_receiver_location(native)
         if payload.get("airband_radius_miles") not in (None, ""):
             self.airband_radius_miles = self._validate_radius(payload["airband_radius_miles"])
+        current_key = self.noaa_location_key()
+        selection_invalidated = False
+        if previous_key != current_key and self.noaa_selection_location_key is not None:
+            self.noaa_selection_location_key = None
+            self.noaa_station = "Receiver location changed — NOAA rescan required"
+            selection_invalidated = True
+            LOG.info("Receiver coordinates changed; invalidated saved NOAA selection.")
         self._persist_port_settings()
-        return self.pi_location()
+        result = self.pi_location()
+        result["noaa_selection_invalidated"] = selection_invalidated
+        return result
 
     def save_airband_radius(self, value: Any) -> dict[str, Any]:
         self.airband_radius_miles = self._validate_radius(value)
@@ -280,12 +316,13 @@ class PiPortSettingsStore(SettingsStore):
     def save_noaa_selection(self, frequency_hz: int, station: str) -> None:
         self.noaa_frequency_hz = int(frequency_hz)
         self.noaa_station = str(station)
+        self.noaa_selection_location_key = self.noaa_location_key()
         self._persist_port_settings()
-
 
     def reset_noaa_selection(self) -> None:
         self.noaa_frequency_hz = int(NOAA_PROFILE["frequency_hz"])
-        self.noaa_station = "Selection cleared — awaiting full NOAA scan"
+        self.noaa_station = "Selection cleared — awaiting Fast NOAA scan"
+        self.noaa_selection_location_key = None
         self._persist_port_settings()
 
 
@@ -1678,6 +1715,8 @@ class PiPortHandler(BaseHTTPRequestHandler):
             "saved_noaa_selection_available": True,
             "saved_noaa_frequency_hz": self.settings.noaa_frequency_hz,
             "saved_noaa_station": self.settings.noaa_station,
+            "saved_noaa_selection_current_location": self.settings.can_reuse_noaa_selection(),
+            "noaa_start_policy": "reuse_saved_verified_channel_until_location_change_or_manual_rescan",
             "rf_gain_db": NOAA_PROFILE["gain_db"],
             "audio_output_gain": None,
             "receiver_location_configured": True,
@@ -1800,12 +1839,29 @@ class PiPortHandler(BaseHTTPRequestHandler):
                     self.audio_ops.live_noaa_stop()
                 if reset_requested:
                     self.settings.reset_noaa_selection()
-                survey = self.audio_ops.survey_noaa(self.settings)
+                rescan_reason = "manual_rescan" if reset_requested else self.settings.noaa_selection_rescan_reason()
+                scan_required = bool(rescan_reason)
+                if scan_required:
+                    survey = self.audio_ops.survey_noaa(self.settings)
+                    LOG.info(
+                        "NOAA channel scan completed: reason=%s selected=%.3f MHz location_key=%s",
+                        rescan_reason,
+                        self.settings.noaa_frequency_hz / 1_000_000,
+                        self.settings.noaa_location_key(),
+                    )
+                else:
+                    survey = None
+                    LOG.info(
+                        "NOAA reusing saved verified channel %.3f MHz for unchanged receiver location.",
+                        self.settings.noaa_frequency_hz / 1_000_000,
+                    )
                 self.audio_ops.live_noaa_start(self.settings)
                 self.send_json({
                     "started": True,
                     "reset_requested": reset_requested,
-                    "full_channel_scan": True,
+                    "saved_channel_reused": not scan_required,
+                    "rescan_reason": rescan_reason,
+                    "full_channel_scan": scan_required,
                     "survey": survey,
                     **self.port_status(),
                 })
