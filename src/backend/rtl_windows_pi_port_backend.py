@@ -71,6 +71,10 @@ DEFAULT_AIRBAND_SEARCH_MODE = "traditional"
 DEFAULT_AIRBAND_SPECTRUM_MARGIN_DB = 8.0
 MIN_AIRBAND_SPECTRUM_MARGIN_DB = 2.0
 MAX_AIRBAND_SPECTRUM_MARGIN_DB = 30.0
+DEFAULT_AIRBAND_PLAYBACK_SQUELCH_RMS = 0.0
+MIN_AIRBAND_PLAYBACK_SQUELCH_RMS = 0.0
+MAX_AIRBAND_PLAYBACK_SQUELCH_RMS = 5000.0
+AIRBAND_PLAYBACK_SQUELCH_STEP_RMS = 100.0
 FAST_AIRBAND_LOW_HZ = 120_000_000
 FAST_AIRBAND_HIGH_HZ = 130_000_000
 FAST_AIRBAND_CHANNEL_STEP_HZ = 25_000
@@ -89,6 +93,7 @@ class PiPortSettingsStore(SettingsStore):
         self.airband_rf_gain_db = DEFAULT_AIRBAND_RF_GAIN_DB
         self.airband_search_mode = DEFAULT_AIRBAND_SEARCH_MODE
         self.airband_spectrum_margin_db = DEFAULT_AIRBAND_SPECTRUM_MARGIN_DB
+        self.airband_playback_squelch_rms = DEFAULT_AIRBAND_PLAYBACK_SQUELCH_RMS
         self.airband_blocked_frequencies_hz: list[int] = []
         self.noaa_frequency_hz = int(NOAA_PROFILE["frequency_hz"])
         self.noaa_station = f"Configured NOAA — {self.noaa_frequency_hz / 1_000_000:.3f} MHz"
@@ -110,6 +115,9 @@ class PiPortSettingsStore(SettingsStore):
                 )
                 self.airband_spectrum_margin_db = self._validate_airband_spectrum_margin(
                     loaded.get("airband_spectrum_margin_db", DEFAULT_AIRBAND_SPECTRUM_MARGIN_DB)
+                )
+                self.airband_playback_squelch_rms = self._validate_airband_playback_squelch(
+                    loaded.get("airband_playback_squelch_rms", DEFAULT_AIRBAND_PLAYBACK_SQUELCH_RMS)
                 )
                 blocked = loaded.get("airband_blocked_frequencies_hz", [])
                 if isinstance(blocked, list):
@@ -158,6 +166,13 @@ class PiPortSettingsStore(SettingsStore):
             raise ValueError("Fast carrier trigger must be between 2 and 30 dB above local spectrum floor.")
         return round(margin, 1)
 
+    @staticmethod
+    def _validate_airband_playback_squelch(value: Any) -> float:
+        threshold = float(value)
+        if not MIN_AIRBAND_PLAYBACK_SQUELCH_RMS <= threshold <= MAX_AIRBAND_PLAYBACK_SQUELCH_RMS:
+            raise ValueError("Live Airband squelch must be between 0 and 5000 RMS.")
+        return round(threshold / AIRBAND_PLAYBACK_SQUELCH_STEP_RMS) * AIRBAND_PLAYBACK_SQUELCH_STEP_RMS
+
     def _persist_port_settings(self) -> None:
         with self.lock:
             payload = {
@@ -167,6 +182,7 @@ class PiPortSettingsStore(SettingsStore):
                 "airband_rf_gain_db": self.airband_rf_gain_db,
                 "airband_search_mode": self.airband_search_mode,
                 "airband_spectrum_margin_db": self.airband_spectrum_margin_db,
+                "airband_playback_squelch_rms": self.airband_playback_squelch_rms,
                 "airband_blocked_frequencies_hz": self.airband_blocked_frequencies_hz,
                 "noaa_selection": {
                     "frequency_hz": self.noaa_frequency_hz,
@@ -212,6 +228,7 @@ class PiPortSettingsStore(SettingsStore):
             "gain_units": "dB",
             "airband_search_mode": self.airband_search_mode,
             "airband_spectrum_margin_db": self.airband_spectrum_margin_db,
+            "airband_playback_squelch_rms": self.airband_playback_squelch_rms,
             "airband_fast_range_hz": [FAST_AIRBAND_LOW_HZ, FAST_AIRBAND_HIGH_HZ],
             "airband_blocked_frequencies_hz": list(self.airband_blocked_frequencies_hz),
         }
@@ -229,6 +246,19 @@ class PiPortSettingsStore(SettingsStore):
             self.airband_spectrum_margin_db = self._validate_airband_spectrum_margin(
                 payload["airband_spectrum_margin_db"]
             )
+        self._persist_port_settings()
+        return self.airband_tuning()
+
+    def adjust_airband_playback_squelch(self, delta_value: Any) -> dict[str, Any]:
+        delta = float(delta_value)
+        if delta not in (-AIRBAND_PLAYBACK_SQUELCH_STEP_RMS, AIRBAND_PLAYBACK_SQUELCH_STEP_RMS):
+            raise ValueError("Live squelch adjustment must be -100 or +100 RMS.")
+        self.airband_playback_squelch_rms = self._validate_airband_playback_squelch(
+            max(MIN_AIRBAND_PLAYBACK_SQUELCH_RMS, min(
+                MAX_AIRBAND_PLAYBACK_SQUELCH_RMS,
+                self.airband_playback_squelch_rms + delta,
+            ))
+        )
         self._persist_port_settings()
         return self.airband_tuning()
 
@@ -674,6 +704,8 @@ class AirbandScanPort:
             "airband_hold_rms_sample": None,
             "airband_hold_quiet_seconds": 0.0,
             "airband_hold_release_reason": None,
+            "airband_playback_squelch_muted": False,
+            "airband_playback_squelch_last_rms": None,
             "airband_search_mode": self.settings.airband_search_mode,
             "airband_spectrum_sweeps": 0,
             "airband_spectrum_candidate_count": 0,
@@ -848,6 +880,8 @@ class AirbandScanPort:
                 "airband_hold_channel": None,
                 "airband_hold_quiet_seconds": 0.0,
                 "airband_hold_release_reason": None,
+                "airband_playback_squelch_muted": False,
+                "airband_playback_squelch_last_rms": None,
                 "airband_search_mode": self.settings.airband_search_mode,
                 "airband_spectrum_sweeps": 0,
                 "airband_spectrum_candidate_count": 0,
@@ -883,6 +917,23 @@ class AirbandScanPort:
         with wave.open(io.BytesIO(wav_content), "rb") as wav_file:
             return wav_file.getnframes() / float(max(1, wav_file.getframerate()))
 
+    def live_playback_chunk(self, after_sequence: int) -> tuple[int, bytes, bool, float] | None:
+        # Step 67: live Airband playback squelch RMS gate.
+        next_chunk = self.audio_ops.audio.next_live_wav(after_sequence)
+        if next_chunk is None:
+            return None
+        sequence, content = next_chunk
+        rms = round(rms_from_wav(content), 2)
+        threshold = float(self.settings.airband_playback_squelch_rms)
+        muted = bool(threshold > 0.0 and rms < threshold)
+        if muted:
+            pcm, rate = pcm_from_wav(content)
+            content = make_wav(bytes(len(pcm)), rate)
+        with self.lock:
+            self.state["airband_playback_squelch_muted"] = muted
+            self.state["airband_playback_squelch_last_rms"] = rms
+        return sequence, content, muted, rms
+
     def release_held_channel(self, block: bool) -> dict[str, Any]:
         with self.lock:
             channel = self.state.get("airband_hold_channel")
@@ -901,7 +952,6 @@ class AirbandScanPort:
         }
 
     def _hold_detected_channel(self, channel: dict[str, Any], candidate: dict[str, Any]) -> None:
-        quiet_threshold = max(MIN_AIRBAND_ACTIVITY_RMS, self.settings.airband_activity_threshold_rms * 0.70)
         self.release_hold_event.clear()
         with self.lock:
             self.hold_identifier += 1
@@ -925,6 +975,11 @@ class AirbandScanPort:
                     break
                 cursor, wav_content = chunk
                 rms = rms_from_wav(wav_content)
+                quiet_threshold = max(
+                    MIN_AIRBAND_ACTIVITY_RMS,
+                    self.settings.airband_activity_threshold_rms * 0.70,
+                    self.settings.airband_playback_squelch_rms,
+                )
                 if rms < quiet_threshold:
                     quiet_seconds += self._wav_duration_seconds(wav_content)
                 else:
@@ -1653,14 +1708,18 @@ class PiPortHandler(BaseHTTPRequestHandler):
                 self.send_json({**self.port_status(), **self.scan.status()})
             elif request.path == "/api/airband/scan/live/audio.wav":
                 after = int(query.get("from", ["0"])[0])
-                next_chunk = self.audio.next_live_wav(after)
+                next_chunk = self.scan.live_playback_chunk(after)
                 if not self.scan.status().get("airband_hold_active") or next_chunk is None:
                     self.send_response(HTTPStatus.NO_CONTENT)
                     self.send_header("Cache-Control", "no-store")
                     self.end_headers()
                 else:
-                    sequence, content = next_chunk
-                    self.send_binary(content, "audio/wav", {"X-Source-Samples": str(max(1, sequence - after))})
+                    sequence, content, muted, rms = next_chunk
+                    self.send_binary(content, "audio/wav", {
+                        "X-Source-Samples": str(max(1, sequence - after)),
+                        "X-Airband-Squelch-Muted": "1" if muted else "0",
+                        "X-Airband-Chunk-RMS": str(rms),
+                    })
             elif request.path == "/api/airband/scan/last_audio.wav":
                 if self.scan.last_audio is None:
                     self.send_json({"error": "No activity audio has been captured."}, HTTPStatus.NOT_FOUND)
@@ -1719,6 +1778,9 @@ class PiPortHandler(BaseHTTPRequestHandler):
                 self.send_json({"saved": True, "receiver_location": location, "noaa_selection_preserved": True})
             elif request.path == "/api/settings/airband-scan":
                 tuning = self.settings.save_airband_tuning(self.read_json())
+                self.send_json({"saved": True, **tuning})
+            elif request.path == "/api/settings/airband-playback-squelch":
+                tuning = self.settings.adjust_airband_playback_squelch(self.read_json().get("delta_rms"))
                 self.send_json({"saved": True, **tuning})
             elif request.path == "/api/noaa/live/start":
                 # NOAA owns the shared receiver; stop any active Airband scan first.

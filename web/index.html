@@ -309,6 +309,13 @@ body { padding: 0; }
 .map-scanner-actions button { padding: 3px 7px; min-height: 21px; font-size: 10px; line-height: 1.05; border-radius: 4px; }
 .map-scanner-actions span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
+
+/* Step 67: live Airband squelch controls below map */
+.map-squelch-label { margin-left: 3px; font-weight: 700; color: var(--text); }
+.map-squelch-value { min-width: 64px; text-align: center; white-space: nowrap; color: var(--text); }
+#mapAirbandSquelchDown, #mapAirbandSquelchUp { min-width: 24px; padding-left: 5px; padding-right: 5px; font-weight: 700; }
+.map-squelch-value.muted { color: #ffb43c; font-weight: 700; }
+
 </style>
 </head>
 <body>
@@ -508,7 +515,10 @@ body { padding: 0; }
           <div id="mapAirbandScannerActions" class="map-scanner-actions">
             <button id="mapAirbandSkipHeld" type="button" disabled>Skip</button>
             <button id="mapAirbandBlockHeld" class="stop" type="button" disabled>Block</button>
-            <span id="mapAirbandActionState">Available while holding a signal</span>
+            <span class="map-squelch-label">SQL</span>
+            <button id="mapAirbandSquelchDown" type="button" disabled aria-label="Lower Airband squelch">-</button>
+            <span id="mapAirbandSquelchValue" class="map-squelch-value">Off</span>
+            <button id="mapAirbandSquelchUp" type="button" disabled aria-label="Raise Airband squelch">+</button>
           </div></div></div></section>
   <section class="active-panel"><h2>Active Aircraft</h2><table><thead><tr><th>Flight / ICAO</th><th>Altitude</th><th>Speed</th><th>Seen</th></tr></thead><tbody id="aircraftRows"><tr><td colspan="4" class="empty">Loading aircraft data…</td></tr></tbody></table><div class="small">Click an aircraft on the map for details. Trails use altitude colors.</div></section>
 </main>
@@ -536,7 +546,7 @@ body { padding: 0; }
           <dt>Altitude</dt><dd id="detailAltitude">—</dd>
           <dt>Speed / Track</dt><dd id="detailMovement">—</dd>
         </dl>
-        <div class="detail-source">Aircraft/photo enrichment: ADSBDB. Route enrichment: AirLabs when configured. Position data: local readsb receiver.</div>
+        <div class="detail-source">Aircraft/photo and operator-prefix enrichment: ADSBDB. Route enrichment: AirLabs when configured. Position data: local readsb receiver.</div>
       </div>
       <div>
         <div id="aircraftPhotoFrame" class="aircraft-photo-frame">
@@ -545,7 +555,7 @@ body { padding: 0; }
         </div>
         <div id="aircraftPhotoActions" class="aircraft-detail-actions"></div>
         <div id="aircraftLookupActions" class="aircraft-detail-actions"></div>
-        <div class="photo-source-note">Photos are provided by the external aircraft-data source when available; some hosts do not allow embedded display.</div>
+        <div id="aircraftPhotoAttribution" class="photo-source-note">Exact-aircraft photos use ADSBDB when available; generic type fallback photos are labeled and sourced from Wikimedia Commons.</div>
       </div>
     </div>
   </div>
@@ -571,6 +581,14 @@ let liveAudioContext = null;
 let noaaAudioPreparedForStart = false; /* Step 60: NOAA prepares browser audio before selection and owns receiver */
 let noaaAudioUsesAirbandContext = false; /* Step 65: NOAA browser playback context and reconnect support */
 let noaaPlaybackChunksScheduled = 0;
+let noaaPlaybackLastChunkRms = null; /* Step 72: dedicated NOAA browser AudioContext after Airband handoff */
+let noaaHtmlAudioElement = null; /* Step 75: NOAA HTML audio element queue replaces silent Web Audio scheduling */
+let noaaHtmlAudioQueue = [];
+let noaaHtmlAudioCurrentUrl = null;
+let noaaHtmlAudioPrimerUrl = null;
+let noaaHtmlAudioFetchBusy = false;
+let noaaHtmlAudioRealPlaybackStarted = false;
+let noaaHtmlAudioGeneration = 0;
 let liveNextCursor = 0;
 let liveNextPlayTime = 0;
 let livePumpTimer = null;
@@ -615,6 +633,12 @@ async function jsonRequest(url, options) {
     throw new Error((result && result.error) ? result.error : `Request failed: HTTP ${response.status}`);
   }
   return result;
+}
+
+/* Step 70: validate operation status API objects before property access */
+function requireObjectResponse(value, label) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+  throw new Error(`${label} returned no status data; the service may be restarting`);
 }
 
 function altitudeFeet(aircraft) {
@@ -1201,7 +1225,7 @@ function renderLocation(location) {
 
 async function updateStatus() {
   try {
-    const status = await jsonRequest('/api/status');
+    const status = requireObjectResponse(await jsonRequest('/api/status'), 'Receiver status');
     setText('stationName', status.noaa_station || 'NOAA Weather');
     setText('stationDetail',
       `NOAA: ${(Number(status.noaa_frequency_hz) / 1000000).toFixed(3)} MHz NFM · Audio RTL-SDR S/N: ${status.audio_receiver_serial || '—'}`);
@@ -1272,15 +1296,18 @@ function likelyTailNumber(value) {
     /^[A-Z]{1,2}-[A-Z0-9]{2,6}$/.test(text) ||
     /^[A-Z]{2,5}[0-9]{1,5}$/.test(text);
 }
-function setAircraftPhotoCandidates(urls, description) {
+function setAircraftPhotoCandidates(urls, description, options = {}) {
   const image = el('aircraftPhoto');
   const message = el('aircraftPhotoMessage');
   const actions = el('aircraftPhotoActions');
-  const candidates = Array.from(new Set(
-    (Array.isArray(urls) ? urls : [])
-      .map(value => String(value || '').trim())
-      .filter(value => /^https?:\/\//i.test(value))
-  ));
+  const attribution = el('aircraftPhotoAttribution');
+  const candidates = Array.from(new Set((Array.isArray(urls) ? urls : [])
+    .map(value => String(value || '').trim())
+    .filter(value => /^https?:\/\//i.test(value))));
+  const fallback = typeof options.fallback === 'function' ? options.fallback : null;
+  const sourceUrl = String(options.sourceUrl || '').trim();
+  const sourceLinkLabel = options.sourceLinkLabel || 'Open Photograph Source';
+  const defaultCaption = 'Exact-aircraft photos use ADSBDB when available; generic type fallback photos are labeled and sourced from Wikimedia Commons.';
 
   actions.replaceChildren();
   image.style.display = 'none';
@@ -1289,21 +1316,26 @@ function setAircraftPhotoCandidates(urls, description) {
   image.decoding = 'async';
   message.style.display = 'block';
   message.textContent = description || 'No photograph available for this aircraft.';
+  if (attribution) attribution.textContent = options.initialCaption || defaultCaption;
 
-  if (!candidates.length) return;
+  const finishOrFallback = () => {
+    if (fallback) { fallback(); return; }
+    message.textContent = description || 'No photograph available for this aircraft.';
+    if (sourceUrl) actions.appendChild(createDetailLink(sourceLinkLabel, sourceUrl));
+    else if (candidates.length) actions.appendChild(createDetailLink('Open Aircraft Photograph', candidates[0]));
+  };
+  if (!candidates.length) { finishOrFallback(); return; }
 
   let index = 0;
   const tryNext = () => {
-    if (index >= candidates.length) {
-      message.textContent = 'Embedded photograph could not be loaded. Open the available photo source below.';
-      actions.appendChild(createDetailLink('Open Aircraft Photograph', candidates[0]));
-      return;
-    }
+    if (index >= candidates.length) { finishOrFallback(); return; }
     const candidate = candidates[index++];
     image.onload = () => {
       message.style.display = 'none';
       image.style.display = 'block';
-      actions.replaceChildren(createDetailLink('Open Full Photograph', candidates[candidates.length - 1]));
+      actions.replaceChildren();
+      actions.appendChild(createDetailLink(sourceUrl ? sourceLinkLabel : 'Open Full Photograph', sourceUrl || candidates[candidates.length - 1]));
+      if (attribution && options.caption) attribution.textContent = options.caption;
     };
     image.onerror = tryNext;
     image.src = candidate;
@@ -1318,6 +1350,108 @@ async function fetchAircraftEnrichment(identifier, callsign = '') {
   if (!response.ok) return null;
   const result = await response.json();
   return result.response && typeof result.response === 'object' ? result.response : null;
+}
+/* Step 69: Wikimedia Commons generic aircraft-type photo fallback */
+let aircraftDetailPhotoRequestSequence = 0;
+function genericAircraftPhotoSearchTerm(aircraft) {
+  if (!aircraft || typeof aircraft !== 'object') return '';
+  const manufacturer = String(aircraft.manufacturer || '').trim();
+  const type = String(aircraft.type || aircraft.icao_type || '').trim();
+  if (!type || type.toLowerCase() === 'unavailable') return '';
+  return manufacturer && !type.toUpperCase().includes(manufacturer.toUpperCase()) ? `${manufacturer} ${type}` : type;
+}
+async function fetchGenericAircraftTypePhoto(aircraft) {
+  const searchTerm = genericAircraftPhotoSearchTerm(aircraft);
+  if (!searchTerm) return null;
+  const params = new URLSearchParams({
+    action: 'query', format: 'json', origin: '*', generator: 'search',
+    gsrsearch: `${searchTerm} aircraft filetype:bitmap`, gsrnamespace: '6', gsrlimit: '8',
+    prop: 'imageinfo', iiprop: 'url|mime', iiurlwidth: '720'
+  });
+  const response = await fetch(`https://commons.wikimedia.org/w/api.php?${params.toString()}`, {cache: 'force-cache'});
+  if (!response.ok) return null;
+  const payload = await response.json();
+  const pages = Object.values(payload.query && payload.query.pages ? payload.query.pages : {})
+    .filter(page => page.imageinfo && page.imageinfo[0] && page.imageinfo[0].thumburl)
+    .filter(page => /^image\//i.test(String(page.imageinfo[0].mime || 'image/unknown')));
+  if (!pages.length) return null;
+  const unwanted = /(logo|diagram|drawing|cockpit|interior|seat|map|badge)/i;
+  const page = pages.find(item => !unwanted.test(String(item.title || ''))) || pages[0];
+  const info = page.imageinfo[0];
+  return {
+    searchTerm,
+    thumbnailUrl: info.thumburl,
+    sourceUrl: info.descriptionurl || `https://commons.wikimedia.org/wiki/${encodeURIComponent(String(page.title || '').replace(/ /g, '_'))}`
+  };
+}
+async function applyGenericAircraftTypePhotoFallback(aircraft, requestSequence) {
+  const searchTerm = genericAircraftPhotoSearchTerm(aircraft);
+  if (!searchTerm || requestSequence !== aircraftDetailPhotoRequestSequence) return;
+  el('aircraftPhotoMessage').textContent = `Searching for a generic ${searchTerm} photo…`;
+  try {
+    const result = await fetchGenericAircraftTypePhoto(aircraft);
+    if (requestSequence !== aircraftDetailPhotoRequestSequence) return;
+    if (!result) {
+      setAircraftPhotoCandidates([], `No exact photograph or generic ${searchTerm} type photo was found.`);
+      return;
+    }
+    setAircraftPhotoCandidates([result.thumbnailUrl], `A generic ${result.searchTerm} photo could not be displayed.`, {
+      sourceUrl: result.sourceUrl,
+      sourceLinkLabel: 'Open Wikimedia Commons Source',
+      initialCaption: `Loading generic ${result.searchTerm} type photo from Wikimedia Commons…`,
+      caption: `Generic ${result.searchTerm} type photo — not this specific aircraft. Source: Wikimedia Commons.`
+    });
+  } catch (_) {
+    if (requestSequence === aircraftDetailPhotoRequestSequence) {
+      setAircraftPhotoCandidates([], `Generic ${searchTerm} photo lookup unavailable.`);
+    }
+  }
+}
+
+/* Step 68: callsign ICAO-prefix operator fallback lookup */
+function airlinePrefixFromCallsign(value) {
+  const callsign = String(value || '').trim().toUpperCase().replace(/\s+/g, '');
+  if (likelyTailNumber(callsign)) return '';
+  const match = callsign.match(/^([A-Z]{3})[0-9][A-Z0-9]*$/);
+  return match ? match[1] : '';
+}
+function routeOperatorFromAdsbdb(route) {
+  if (!route || !route.airline || typeof route.airline !== 'object') return null;
+  const name = String(route.airline.name || '').trim();
+  if (!name) return null;
+  return {
+    name,
+    icao: String(route.airline.icao || '').trim().toUpperCase(),
+    iata: String(route.airline.iata || '').trim().toUpperCase(),
+    source: 'ADSBDB route airline'
+  };
+}
+async function fetchOperatorByCallsignPrefix(callsign) {
+  const prefix = airlinePrefixFromCallsign(callsign);
+  if (!prefix) return null;
+  const response = await fetch(`https://api.adsbdb.com/v0/airline/${encodeURIComponent(prefix)}`, {cache: 'no-store'});
+  if (!response.ok) return null;
+  const payload = await response.json();
+  const rows = payload && payload.response;
+  const candidates = Array.isArray(rows) ? rows : (rows && typeof rows === 'object' ? [rows] : []);
+  const exact = candidates.find(item => String(item.icao || '').toUpperCase() === prefix) || candidates[0];
+  const name = exact ? String(exact.name || '').trim() : '';
+  if (!name) return null;
+  return {
+    name,
+    icao: String(exact.icao || prefix).trim().toUpperCase(),
+    iata: String(exact.iata || '').trim().toUpperCase(),
+    source: 'ADSBDB ICAO-prefix fallback'
+  };
+}
+function displayOperatorMatch(match) {
+  if (!match || !match.name) return false;
+  const code = match.icao || match.iata || '';
+  const qualifier = match.source === 'ADSBDB ICAO-prefix fallback'
+    ? ` — ${code || 'prefix'} fallback`
+    : '';
+  detailValue('detailOperator', `${match.name}${qualifier}`);
+  return true;
 }
 async function applyAirlabsRouteToDetails(flight) {
   const callsign = String(flight || '').trim().toUpperCase();
@@ -1348,7 +1482,9 @@ async function showAircraftDetails(aircraft) {
   const flight = aircraft.flight ? String(aircraft.flight).trim().toUpperCase() : '';
   const rawHex = String(aircraft.hex || '').replace(/^~/, '').toUpperCase();
   const broadcastTail = likelyTailNumber(flight) ? flight : '';
+  const airlinePrefix = airlinePrefixFromCallsign(flight);
   const title = flight || rawHex || 'Aircraft Details';
+  const photoRequestSequence = ++aircraftDetailPhotoRequestSequence;
 
   el('aircraftDetailTitle').textContent = title;
   el('aircraftDetailOverlay').classList.add('open');
@@ -1383,6 +1519,7 @@ async function showAircraftDetails(aircraft) {
     let payload = await fetchAircraftEnrichment(rawHex || broadcastTail, flight && !broadcastTail ? flight : '');
     let enrichedAircraft = payload ? payload.aircraft || null : null;
     let route = payload ? payload.flightroute || null : null;
+    let operatorIdentified = false;
 
     // For private/general aviation, readsb often broadcasts the tail number as
     // flight. Use it as a second public aircraft-record lookup when Mode-S
@@ -1398,17 +1535,24 @@ async function showAircraftDetails(aircraft) {
       detailValue('detailRegistration', registration || 'Unavailable');
       detailValue('detailManufacturer', enrichedAircraft.manufacturer || 'Unavailable');
       detailValue('detailModel', enrichedAircraft.type || enrichedAircraft.icao_type || 'Unavailable');
-      detailValue('detailOperator', enrichedAircraft.registered_owner || 'Unavailable');
+      const registeredOwner = String(enrichedAircraft.registered_owner || '').trim();
+      if (registeredOwner) {
+        detailValue('detailOperator', registeredOwner);
+        operatorIdentified = true;
+      } else {
+        detailValue('detailOperator', airlinePrefix ? 'Searching callsign prefix…' : 'Unavailable');
+      }
       updateTailNumberActions(registration);
       setAircraftPhotoCandidates(
         [enrichedAircraft.url_photo_thumbnail, enrichedAircraft.url_photo],
-        'No photograph available for this aircraft.'
+        'No exact photograph available for this aircraft.',
+        {fallback: () => applyGenericAircraftTypePhotoFallback(enrichedAircraft, photoRequestSequence)}
       );
     } else {
       detailValue('detailRegistration', broadcastTail || 'Unavailable');
       detailValue('detailManufacturer', 'Unavailable');
       detailValue('detailModel', 'Unavailable');
-      detailValue('detailOperator', 'Unavailable');
+      detailValue('detailOperator', airlinePrefix ? 'Searching callsign prefix…' : 'Unavailable');
       updateTailNumberActions(broadcastTail);
       setAircraftPhotoCandidates([], 'No photograph available for this aircraft.');
     }
@@ -1420,6 +1564,19 @@ async function showAircraftDetails(aircraft) {
     } else {
       detailValue('detailOrigin', 'Route unavailable');
       detailValue('detailDestination', 'Route unavailable');
+    }
+
+    if (!operatorIdentified) {
+      operatorIdentified = displayOperatorMatch(routeOperatorFromAdsbdb(route));
+    }
+    if (!operatorIdentified && airlinePrefix) {
+      try {
+        const fallbackOperator = await fetchOperatorByCallsignPrefix(flight);
+        operatorIdentified = displayOperatorMatch(fallbackOperator);
+        if (!operatorIdentified) detailValue('detailOperator', `No operator match for ${airlinePrefix}`);
+      } catch (operatorError) {
+        detailValue('detailOperator', `${airlinePrefix} lookup unavailable`);
+      }
     }
 
     if (enrichedAircraft || route) {
@@ -1654,7 +1811,7 @@ async function pumpLiveAudio() {
   try {
     if (liveAudioContext.state !== 'running') await liveAudioContext.resume();
     if (liveAudioContext.state !== 'running') {
-      throw new Error(`Browser audio context is ${liveAudioContext.state}; use Reconnect NOAA Audio.`);
+      throw new Error(`Shared scanner audio output is ${liveAudioContext.state}; click Reconnect NOAA Audio.`);
     }
     const response = await fetch(`/api/noaa/live/audio.wav?from=${liveNextCursor}&samples=12000&request=${Date.now()}`, {cache: 'no-store'});
     if (response.status === 204) {
@@ -1665,6 +1822,17 @@ async function pumpLiveAudio() {
     const sourceSamples = Number(response.headers.get('X-Source-Samples') || 0);
     const data = await response.arrayBuffer();
     const decoded = await liveAudioContext.decodeAudioData(data.slice(0));
+    let energy = 0;
+    let sampleCount = 0;
+    for (let channel = 0; channel < decoded.numberOfChannels; channel += 1) {
+      const samples = decoded.getChannelData(channel);
+      const stride = Math.max(1, Math.floor(samples.length / 4096));
+      for (let index = 0; index < samples.length; index += stride) {
+        energy += samples[index] * samples[index];
+        sampleCount += 1;
+      }
+    }
+    noaaPlaybackLastChunkRms = sampleCount ? Math.sqrt(energy / sampleCount) : 0;
     const source = liveAudioContext.createBufferSource();
     source.buffer = decoded;
     source.connect(liveAudioContext.destination);
@@ -1674,18 +1842,16 @@ async function pumpLiveAudio() {
     liveNextCursor += sourceSamples;
     noaaPlaybackChunksScheduled += 1;
     if (noaaPlaybackChunksScheduled === 1) {
-      const output = noaaAudioUsesAirbandContext ? 'shared scanner audio output' : 'NOAA audio output';
-      setMessage('audioMessage', `NOAA live audio playing through ${output}.`, 'good');
+      setMessage('audioMessage', `NOAA live audio playing through shared scanner output · stream RMS ${noaaPlaybackLastChunkRms.toFixed(4)}.`, 'good');
     }
     const bufferedSeconds = liveNextPlayTime - liveAudioContext.currentTime;
     livePumpTimer = window.setTimeout(pumpLiveAudio, bufferedSeconds > 1.4 ? 250 : 20);
   } catch (error) {
     liveListening = false;
-    setMessage('audioMessage', `NOAA browser playback failed: ${error.message}. Click Reconnect NOAA Audio.`, 'error');
+    setMessage('audioMessage', `NOAA shared-output playback failed: ${error.message}. Click Reconnect NOAA Audio.`, 'error');
     await refreshOperationMenu();
   }
 }
-
 
 async function prepareAirbandAudio() {
   if (!airbandAudioContext) airbandAudioContext = new (window.AudioContext || window.webkitAudioContext)();
@@ -1794,8 +1960,8 @@ async function rescanSavedNoaaChannel() {
   closeMenu();
 
   try {
-    await prepareNoaaAudioForStart();
-    const status = await jsonRequest('/api/status');
+    await prepareNoaaAudioForStart(true);
+    const status = requireObjectResponse(await jsonRequest('/api/status'), 'Receiver status');
     const airband = await readAirbandStatus();
 
     await showBusyAndPaint(
@@ -1828,21 +1994,148 @@ async function rescanSavedNoaaChannel() {
   }
 }
 
-async function prepareNoaaAudioForStart() {
-  // Step 65: NOAA browser playback context and reconnect support.
-  // Prefer the context already proven audible by Airband in this browser tab.
-  if (!liveAudioContext || liveAudioContext.state === 'closed') {
-    if (airbandAudioContext && airbandAudioContext.state !== 'closed') {
-      liveAudioContext = airbandAudioContext;
-      noaaAudioUsesAirbandContext = true;
-    } else {
-      liveAudioContext = new (window.AudioContext || window.webkitAudioContext)();
-      noaaAudioUsesAirbandContext = false;
-    }
+
+function makeNoaaSilentWavUrl() {
+  const sampleRate = 8000;
+  const sampleCount = sampleRate;
+  const buffer = new ArrayBuffer(44 + sampleCount * 2);
+  const view = new DataView(buffer);
+  const putText = (offset, value) => {
+    for (let index = 0; index < value.length; index += 1) view.setUint8(offset + index, value.charCodeAt(index));
+  };
+  putText(0, 'RIFF');
+  view.setUint32(4, 36 + sampleCount * 2, true);
+  putText(8, 'WAVE');
+  putText(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  putText(36, 'data');
+  view.setUint32(40, sampleCount * 2, true);
+  return URL.createObjectURL(new Blob([buffer], {type: 'audio/wav'}));
+}
+function rmsFromNoaaWavArrayBuffer(buffer) {
+  if (!buffer || buffer.byteLength <= 44) return 0;
+  const view = new DataView(buffer);
+  let sum = 0;
+  let count = 0;
+  for (let offset = 44; offset + 1 < buffer.byteLength; offset += 8) {
+    const value = view.getInt16(offset, true) / 32768;
+    sum += value * value;
+    count += 1;
   }
+  return count ? Math.sqrt(sum / count) : 0;
+}
+function resetNoaaHtmlAudioOutput() {
+  noaaHtmlAudioGeneration += 1;
+  noaaHtmlAudioQueue.forEach(item => URL.revokeObjectURL(item.url));
+  noaaHtmlAudioQueue = [];
+  noaaHtmlAudioFetchBusy = false;
+  noaaHtmlAudioRealPlaybackStarted = false;
+  if (noaaHtmlAudioElement) {
+    noaaHtmlAudioElement.onended = null;
+    noaaHtmlAudioElement.onerror = null;
+    noaaHtmlAudioElement.pause();
+    noaaHtmlAudioElement.removeAttribute('src');
+    noaaHtmlAudioElement.load();
+  }
+  if (noaaHtmlAudioCurrentUrl) URL.revokeObjectURL(noaaHtmlAudioCurrentUrl);
+  if (noaaHtmlAudioPrimerUrl) URL.revokeObjectURL(noaaHtmlAudioPrimerUrl);
+  noaaHtmlAudioCurrentUrl = null;
+  noaaHtmlAudioPrimerUrl = null;
+  noaaHtmlAudioElement = null;
+}
+async function primeNoaaHtmlAudioOutput() {
+  /* Step 76: preserve authorized NOAA HTML player during restart scan */
+  if (noaaHtmlAudioElement && noaaHtmlAudioPrimerUrl && !noaaHtmlAudioRealPlaybackStarted) {
+    noaaHtmlAudioElement.onended = null;
+    noaaHtmlAudioElement.onerror = null;
+    noaaHtmlAudioElement.volume = 0;
+    noaaHtmlAudioElement.loop = true;
+    noaaHtmlAudioElement.src = noaaHtmlAudioPrimerUrl;
+    if (noaaHtmlAudioElement.paused) await noaaHtmlAudioElement.play();
+    return;
+  }
+  resetNoaaHtmlAudioOutput();
+  noaaHtmlAudioElement = new Audio();
+  noaaHtmlAudioElement.preload = 'auto';
+  noaaHtmlAudioElement.playsInline = true;
+  noaaHtmlAudioElement.volume = 0;
+  noaaHtmlAudioElement.loop = true;
+  noaaHtmlAudioPrimerUrl = makeNoaaSilentWavUrl();
+  noaaHtmlAudioElement.src = noaaHtmlAudioPrimerUrl;
+  await noaaHtmlAudioElement.play();
+}
+async function playNextNoaaHtmlAudioChunk() {
+  if (!liveListening || !noaaHtmlAudioElement || !noaaHtmlAudioQueue.length) return;
+  const next = noaaHtmlAudioQueue.shift();
+  if (noaaHtmlAudioCurrentUrl) URL.revokeObjectURL(noaaHtmlAudioCurrentUrl);
+  noaaHtmlAudioCurrentUrl = next.url;
+  noaaHtmlAudioElement.loop = false;
+  noaaHtmlAudioElement.volume = 1;
+  noaaHtmlAudioElement.src = next.url;
+  noaaHtmlAudioElement.onended = () => {
+    if (liveListening && noaaHtmlAudioQueue.length) {
+      playNextNoaaHtmlAudioChunk().catch(error => {
+        setMessage('audioMessage', `NOAA HTML playback failed: ${error.message}`, 'error');
+      });
+    }
+  };
+  await noaaHtmlAudioElement.play();
+  noaaPlaybackChunksScheduled += 1;
+  if (!noaaHtmlAudioRealPlaybackStarted) {
+    noaaHtmlAudioRealPlaybackStarted = true;
+    setMessage(
+      'audioMessage',
+      `NOAA live audio playing through HTML player · stream RMS ${next.rms.toFixed(4)}.`,
+      'good'
+    );
+  }
+}
+async function fillNoaaHtmlAudioQueue() {
+  if (!liveListening || !noaaHtmlAudioElement || noaaHtmlAudioFetchBusy) return;
+  noaaHtmlAudioFetchBusy = true;
+  const generation = noaaHtmlAudioGeneration;
+  try {
+    while (liveListening && generation === noaaHtmlAudioGeneration && noaaHtmlAudioQueue.length < 4) {
+      const response = await fetch(`/api/noaa/live/audio.wav?from=${liveNextCursor}&samples=12000&request=${Date.now()}`, {cache: 'no-store'});
+      if (response.status === 204) break;
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const sourceSamples = Number(response.headers.get('X-Source-Samples') || 0);
+      const data = await response.arrayBuffer();
+      noaaPlaybackLastChunkRms = rmsFromNoaaWavArrayBuffer(data);
+      noaaHtmlAudioQueue.push({
+        url: URL.createObjectURL(new Blob([data], {type: 'audio/wav'})),
+        rms: noaaPlaybackLastChunkRms
+      });
+      liveNextCursor += sourceSamples;
+    }
+    if (!noaaHtmlAudioRealPlaybackStarted && noaaHtmlAudioQueue.length >= 2) {
+      await playNextNoaaHtmlAudioChunk();
+    } else if (noaaHtmlAudioRealPlaybackStarted && noaaHtmlAudioElement.paused && noaaHtmlAudioQueue.length) {
+      await playNextNoaaHtmlAudioChunk();
+    }
+  } finally {
+    noaaHtmlAudioFetchBusy = false;
+  }
+}
+
+async function prepareNoaaAudioForStart(forceFreshContext = false) {
+  /* Step 77: NOAA uses the proven shared Airband scanner audio output */
+  // Live testing proved that Airband's browser audio output is audible while
+  // separate NOAA outputs are silent. Arm that same output on this NOAA click.
+  if (typeof resetNoaaHtmlAudioOutput === 'function') resetNoaaHtmlAudioOutput();
+  await prepareAirbandAudio();
+  liveAudioContext = airbandAudioContext;
+  noaaAudioUsesAirbandContext = true;
+  if (!liveAudioContext) throw new Error('Shared scanner audio output could not be created.');
   await liveAudioContext.resume();
   if (liveAudioContext.state !== 'running') {
-    throw new Error(`Browser audio output is ${liveAudioContext.state}. Click Reconnect NOAA Audio.`);
+    throw new Error(`Shared scanner audio output is ${liveAudioContext.state}. Click Reconnect NOAA Audio.`);
   }
   const primer = liveAudioContext.createBuffer(1, 1, liveAudioContext.sampleRate);
   const primerSource = liveAudioContext.createBufferSource();
@@ -1850,21 +2143,18 @@ async function prepareNoaaAudioForStart() {
   primerSource.connect(liveAudioContext.destination);
   primerSource.start();
   noaaAudioPreparedForStart = true;
+  noaaPlaybackLastChunkRms = null;
+  noaaPlaybackChunksScheduled = 0;
 }
+
 async function releaseUnusedPreparedNoaaAudio() {
-  if (!liveListening && liveAudioContext && !noaaAudioUsesAirbandContext) {
-    try { await liveAudioContext.close(); } catch (_) {}
-  }
-  if (!liveListening) {
-    liveAudioContext = null;
-    noaaAudioUsesAirbandContext = false;
-  }
+  if (typeof resetNoaaHtmlAudioOutput === 'function') resetNoaaHtmlAudioOutput();
   noaaAudioPreparedForStart = false;
 }
 
 async function startLive() {
   try {
-    await prepareNoaaAudioForStart();
+    await prepareNoaaAudioForStart(true);
     await jsonRequest('/api/noaa/live/start', {method: 'POST'});
     liveListening = true;
     noaaAudioPreparedForStart = false;
@@ -1883,16 +2173,18 @@ async function startLive() {
 async function stopLive(preserveAudioContext = false) {
   liveListening = false;
   noaaPlaybackChunksScheduled = 0;
-  if (livePumpTimer) window.clearTimeout(livePumpTimer);
+  noaaPlaybackLastChunkRms = null;
+  if (livePumpTimer) {
+    window.clearTimeout(livePumpTimer);
+    livePumpTimer = null;
+  }
+  if (typeof resetNoaaHtmlAudioOutput === 'function') resetNoaaHtmlAudioOutput();
   try { await jsonRequest('/api/noaa/live/stop', {method: 'POST'}); } catch (_) {}
-  if (liveAudioContext && !preserveAudioContext && !noaaAudioUsesAirbandContext) {
-    await liveAudioContext.close();
-  }
-  if (!preserveAudioContext) {
-    liveAudioContext = null;
-    noaaAudioUsesAirbandContext = false;
-    noaaAudioPreparedForStart = false;
-  }
+  // Keep the shared scanner output available for the next explicit NOAA or
+  // Airband action; no queued NOAA chunks remain after liveListening=false.
+  liveAudioContext = airbandAudioContext || null;
+  noaaAudioUsesAirbandContext = Boolean(liveAudioContext);
+  noaaAudioPreparedForStart = false;
   setMessage('audioMessage', 'NOAA listening stopped.', '');
   await updateStatus();
 }
@@ -2024,7 +2316,7 @@ async function stopExperimentalScan() {
 
 async function pollExperimentalScan() {
   try {
-    const status = await jsonRequest('/api/airband/scan/status');
+    const status = requireObjectResponse(await jsonRequest('/api/airband/scan/status'), 'Airband status');
     syncAirbandHoldAudio(status);
     if (!status.airband_scan_running) {
       el('activityScanStart').disabled = false;
@@ -2189,7 +2481,7 @@ function toggleMenu() {
 }
 async function readAirbandStatus() {
   try {
-    return await jsonRequest('/api/airband/scan/status');
+    return requireObjectResponse(await jsonRequest('/api/airband/scan/status'), 'Airband status');
   } catch (_) {
     return {};
   }
@@ -2210,7 +2502,7 @@ async function waitForAirbandStopped(timeoutMilliseconds = 15000) {
 async function waitForNoaaRunning(timeoutMilliseconds = 12000) {
   const deadline = Date.now() + timeoutMilliseconds;
   while (Date.now() < deadline) {
-    const status = await jsonRequest('/api/status');
+    const status = requireObjectResponse(await jsonRequest('/api/status'), 'Receiver status');
     if (status.live_audio_running) return status;
     updateBusy(
       'Starting NOAA Weather audio…',
@@ -2250,7 +2542,7 @@ function updateAirbandTuningDetail(airband, noaaActive) {
 
 async function refreshOperationMenu() {
   try {
-    const status = await jsonRequest('/api/status');
+    const status = requireObjectResponse(await jsonRequest('/api/status'), 'Receiver status');
     const airband = await readAirbandStatus();
     const noaaBackendActive = Boolean(status.live_audio_running && status.audio_mode === 'noaa_live');
     const noaaBrowserPlaying = Boolean(liveListening && liveAudioContext && noaaPlaybackChunksScheduled > 0);
@@ -2278,7 +2570,7 @@ async function refreshOperationMenu() {
       setMessage('operationsMessage', 'NOAA and Airband scanner are stopped.', '');
     }
   } catch (error) {
-    setMessage('operationsMessage', `Operation status failed: ${error.message}`, 'error');
+    setMessage('operationsMessage', `Operation status temporarily unavailable: ${error.message}. Retrying automatically.`, 'warning');
   }
 }
 async function startAirbandBackground(showOverlay = true) {
@@ -2330,7 +2622,8 @@ async function stopAirbandBackground(changePreference = true, showOverlay = true
   el('airbandSkipHeld').disabled = true;
   el('airbandBlockHeld').disabled = true;
   const released = await waitForAirbandStopped();
-  if (showOverlay && !operationTransitionActive) await hideBusyAfterMinimum(550);
+  /* Step 71: guarantee Airband menu stop releases busy overlay */
+  if (showOverlay) await hideBusyAfterMinimum(550);
   await refreshOperationMenu();
   return released;
 }
@@ -2340,8 +2633,8 @@ async function toggleNoaaMenuOperation() {
   setOperationButtonsDisabled(true);
 
   try {
-    if (!liveListening) await prepareNoaaAudioForStart();
-    const current = await jsonRequest('/api/status');
+    if (!liveListening) await prepareNoaaAudioForStart(true);
+    const current = requireObjectResponse(await jsonRequest('/api/status'), 'Receiver status');
     if (current.live_audio_running && current.audio_mode === 'noaa_live' && !liveListening) {
       closeMenu();
       await showBusyAndPaint('Reconnect NOAA Audio…', 'Attaching browser playback to the active NOAA receiver stream.');
@@ -2421,7 +2714,7 @@ async function toggleAirbandMenuOperation() {
     }
 
     closeMenu();
-    const status = await jsonRequest('/api/status');
+    const status = requireObjectResponse(await jsonRequest('/api/status'), 'Receiver status');
     if (status.live_audio_running || liveListening) {
       await showBusyAndPaint('Stopping NOAA Weather…', 'Releasing the shared receiver for Airband scanning.');
       await stopLive();
@@ -2434,6 +2727,7 @@ async function toggleAirbandMenuOperation() {
     hideBusy();
     setMessage('operationsMessage', `Airband operation failed: ${error.message}`, 'error');
   } finally {
+    hideBusy(); // Step 71 safeguard: no menu operation may leave the spinner visible.
     operationTransitionActive = false;
     setOperationButtonsDisabled(false);
     await refreshOperationMenu();
@@ -2637,6 +2931,56 @@ document.addEventListener('DOMContentLoaded', () => {
     block.addEventListener("click", () => scannerAction("block").catch((error) => setMapState(error.message)));
     refreshMapScannerControls();
     window.setInterval(refreshMapScannerControls, 500);
+  });
+})();
+</script>
+
+
+<script>
+/* Step 67: live Airband squelch controls below map */
+(() => {
+  const byId = (id) => document.getElementById(id);
+  function renderSquelch(status) {
+    const level = Number(status.airband_playback_squelch_rms || 0);
+    const muted = Boolean(status.airband_playback_squelch_muted);
+    const holding = Boolean(status.airband_hold_active);
+    const value = byId("mapAirbandSquelchValue");
+    if (value) {
+      value.textContent = level <= 0 ? "Off" : `${level.toFixed(0)} RMS${muted ? " mute" : ""}`;
+      value.classList.toggle("muted", muted);
+    }
+    const down = byId("mapAirbandSquelchDown");
+    const up = byId("mapAirbandSquelchUp");
+    if (down) down.disabled = !holding || level <= 0;
+    if (up) up.disabled = !holding || level >= 5000;
+  }
+  async function adjustSquelch(deltaRms) {
+    const response = await fetch("/api/settings/airband-playback-squelch", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({delta_rms: deltaRms})
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || "Unable to adjust Airband squelch.");
+    renderSquelch(result);
+  }
+  async function refreshSquelch() {
+    try {
+      const response = await fetch("/api/airband/scan/status", {cache: "no-store"});
+      if (!response.ok) return;
+      renderSquelch(await response.json());
+    } catch (error) {
+      void error;
+    }
+  }
+  window.addEventListener("DOMContentLoaded", () => {
+    const down = byId("mapAirbandSquelchDown");
+    const up = byId("mapAirbandSquelchUp");
+    if (!down || !up) return;
+    down.addEventListener("click", () => adjustSquelch(-100).catch(() => {}));
+    up.addEventListener("click", () => adjustSquelch(100).catch(() => {}));
+    refreshSquelch();
+    window.setInterval(refreshSquelch, 450);
   });
 })();
 </script>
