@@ -163,6 +163,11 @@ copy_dependency_dlls "${RTL_POWER}" "${STAGE}/bin"
 copy_dependency_dlls "${ROOT}/dist/native-windows/rtl_dual_device_probe.exe" "${STAGE}/bin"
 copy_dependency_dlls "${ROOT}/dist/third_party/dump1090/dump1090.exe" "${STAGE}/bin"
 cp "${ROOT}/runtime/settings/faa_airband_catalog.json" "${STAGE}/seed/settings/faa_airband_catalog.json"
+if [[ -f "${ROOT}/runtime/settings/aircraft_hex_db.json" ]]; then
+  cp "${ROOT}/runtime/settings/aircraft_hex_db.json" "${STAGE}/seed/settings/aircraft_hex_db.json"
+else
+  printf 'WARNING: aircraft_hex_db.json not found. Run tools/import_aircraft_hex_db.py before building the release for local ICAO hex enrichment.\n' >&2
+fi
 cp "${ROOT}/runtime/settings/operator_prefixes.json" "${STAGE}/seed/settings/operator_prefixes.json"
 cp "${ROOT}/docs/WINDOWS_SERVICE_RELEASE.md" "${STAGE}/README_SERVICE_RELEASE.md"
 
@@ -224,6 +229,9 @@ if errorlevel 1 (
 )
 if not exist "%DATA%\runtime\settings\faa_airband_catalog.json" (
   copy /Y "%~dp0seed\settings\faa_airband_catalog.json" "%DATA%\runtime\settings\faa_airband_catalog.json" >nul
+)
+if exist "%~dp0seed\settings\aircraft_hex_db.json" if not exist "%DATA%\runtime\settings\aircraft_hex_db.json" (
+  copy /Y "%~dp0seed\settings\aircraft_hex_db.json" "%DATA%\runtime\settings\aircraft_hex_db.json" >nul
 )
 if not exist "%DATA%\runtime\settings\operator_prefixes.json" (
   copy /Y "%~dp0seed\settings\operator_prefixes.json" "%DATA%\runtime\settings\operator_prefixes.json" >nul

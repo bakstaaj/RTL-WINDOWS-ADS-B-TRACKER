@@ -551,7 +551,7 @@ body { padding: 0; }
           <dt>Altitude</dt><dd id="detailAltitude">—</dd>
           <dt>Speed / Track</dt><dd id="detailMovement">—</dd>
         </dl>
-        <div class="detail-source">Aircraft/photo and operator-prefix enrichment: ADSBDB. Route enrichment: AirLabs when configured. Position data: local readsb receiver.</div>
+        <div class="detail-source">Aircraft/photo enrichment: ADSBDB plus local ICAO hex database when available. Operator fallback: local prefix table, local hex database, then ADSBDB. Route enrichment: AirLabs when configured. Position data: local receiver.</div>
       </div>
       <div>
         <div id="aircraftPhotoFrame" class="aircraft-photo-frame">
@@ -1371,6 +1371,42 @@ function setAircraftPhotoCandidates(urls, description, options = {}) {
   };
   tryNext();
 }
+
+async function fetchLocalAircraftByHex(rawHex) {
+  const hex = String(rawHex || '').replace(/[^0-9A-Fa-f]/g, '').toUpperCase();
+  if (hex.length !== 6) return null;
+  try {
+    const response = await fetch(`/api/aircraft/hex?hex=${encodeURIComponent(hex)}`, {cache: 'no-store'});
+    if (!response.ok) return null;
+    const payload = await response.json();
+    return payload && payload.matched && payload.aircraft ? payload.aircraft : null;
+  } catch (_) {
+    return null;
+  }
+}
+function localAircraftOperatorName(aircraft) {
+  if (!aircraft || typeof aircraft !== 'object') return '';
+  return String(
+    aircraft.operator ||
+    aircraft.registered_owner ||
+    aircraft.owner_operator ||
+    aircraft.ownOp ||
+    ''
+  ).trim();
+}
+function localAircraftRegistration(aircraft) {
+  if (!aircraft || typeof aircraft !== 'object') return '';
+  return String(aircraft.registration || aircraft.reg || '').trim().toUpperCase();
+}
+function localAircraftModelText(aircraft) {
+  if (!aircraft || typeof aircraft !== 'object') return '';
+  const type = String(aircraft.type || aircraft.icao_type || '').trim();
+  const model = String(aircraft.model || '').trim();
+  const description = String(aircraft.description || '').trim();
+  if (model && type && !model.toUpperCase().includes(type.toUpperCase())) return `${model} (${type})`;
+  return description || model || type;
+}
+
 async function fetchAircraftEnrichment(identifier, callsign = '') {
   if (!identifier) return null;
   let url = `https://api.adsbdb.com/v0/aircraft/${encodeURIComponent(identifier)}`;
@@ -1574,6 +1610,7 @@ async function showAircraftDetails(aircraft) {
   }
 
   try {
+    const localAircraft = rawHex ? await fetchLocalAircraftByHex(rawHex) : null;
     let payload = await fetchAircraftEnrichment(rawHex || broadcastTail, flight && !broadcastTail ? flight : '');
     let enrichedAircraft = payload ? payload.aircraft || null : null;
     let route = payload ? payload.flightroute || null : null;
@@ -1589,11 +1626,11 @@ async function showAircraftDetails(aircraft) {
     }
 
     if (enrichedAircraft) {
-      const registration = enrichedAircraft.registration || broadcastTail || '';
+      const registration = enrichedAircraft.registration || localAircraftRegistration(localAircraft) || broadcastTail || '';
       detailValue('detailRegistration', registration || 'Unavailable');
-      detailValue('detailManufacturer', enrichedAircraft.manufacturer || 'Unavailable');
-      detailValue('detailModel', enrichedAircraft.type || enrichedAircraft.icao_type || 'Unavailable');
-      const registeredOwner = String(enrichedAircraft.registered_owner || '').trim();
+      detailValue('detailManufacturer', enrichedAircraft.manufacturer || (localAircraft && localAircraft.manufacturer) || 'Unavailable');
+      detailValue('detailModel', enrichedAircraft.type || enrichedAircraft.icao_type || localAircraftModelText(localAircraft) || 'Unavailable');
+      const registeredOwner = String(enrichedAircraft.registered_owner || localAircraftOperatorName(localAircraft) || '').trim();
       if (registeredOwner) {
         detailValue('detailOperator', registeredOwner);
         operatorIdentified = true;
@@ -1606,6 +1643,19 @@ async function showAircraftDetails(aircraft) {
         'No exact photograph available for this aircraft.',
         {fallback: () => applyGenericAircraftTypePhotoFallback(enrichedAircraft, photoRequestSequence)}
       );
+    } else if (localAircraft) {
+      const registration = localAircraftRegistration(localAircraft) || broadcastTail || '';
+      const localModel = localAircraftModelText(localAircraft);
+      const localOperator = localAircraftOperatorName(localAircraft);
+      detailValue('detailRegistration', registration || 'Unavailable');
+      detailValue('detailManufacturer', localAircraft.manufacturer || 'Unavailable');
+      detailValue('detailModel', localModel || 'Unavailable');
+      detailValue('detailOperator', localOperator || (airlinePrefix ? 'Searching callsign prefix…' : 'Unavailable'));
+      operatorIdentified = Boolean(localOperator);
+      updateTailNumberActions(registration || broadcastTail);
+      setAircraftPhotoCandidates([], 'No exact aircraft photograph available from the local ICAO hex database.', {
+        fallback: () => applyGenericAircraftTypePhotoFallback(localAircraft, photoRequestSequence)
+      });
     } else {
       detailValue('detailRegistration', broadcastTail || 'Unavailable');
       detailValue('detailManufacturer', 'Unavailable');
@@ -1637,10 +1687,12 @@ async function showAircraftDetails(aircraft) {
       }
     }
 
-    if (enrichedAircraft || route) {
-      setMessage('aircraftDetailStatus', 'Aircraft lookup complete. Tail-number actions are available below the photo.', 'good');
+    if (enrichedAircraft || route || localAircraft) {
+      setMessage('aircraftDetailStatus', localAircraft && !enrichedAircraft
+        ? 'Aircraft lookup complete using the local ICAO hex database.'
+        : 'Aircraft lookup complete. Tail-number actions are available below the photo.', 'good');
     } else {
-      setMessage('aircraftDetailStatus', 'No public aircraft or route match was found for this target.', 'warning');
+      setMessage('aircraftDetailStatus', 'No public aircraft, local aircraft, or route match was found for this target.', 'warning');
     }
   } catch (error) {
     detailValue('detailRegistration', broadcastTail || 'Lookup unavailable');
