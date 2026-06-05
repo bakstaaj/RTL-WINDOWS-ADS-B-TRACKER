@@ -289,6 +289,9 @@ body { padding: 0; }
 /* Step 56: fast spectrum Airband search */
 .airband-fast-search-controls { display: flex; align-items: end; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
 .airband-fast-search-controls label { flex: 1 1 145px; }
+.scanner-search-stack { flex: 1 1 145px; }
+.scanner-search-stack label { display: block; }
+.scanner-search-stack button { width: 100%; margin-top: 5px; }
 
 /* Step 54: traditional Airband scanner controls using native page functions */
 #airbandSkipHeld:enabled { background: #246a9a; }
@@ -380,9 +383,9 @@ body { padding: 0; }
             <select id="airbandActivityThreshold">
               <option value="250">Very High — 250 RMS</option>
               <option value="400">High — 400 RMS</option>
-              <option value="650" selected>Normal — 650 RMS</option>
+              <option value="650">Normal — 650 RMS</option>
               <option value="900">Low — 900 RMS</option>
-              <option value="1300">Very Low — 1300 RMS</option>
+              <option value="1300" selected>Very Low — 1300 RMS</option>
             </select>
           </label>
           <label>Airband RF Gain
@@ -396,14 +399,16 @@ body { padding: 0; }
             </select>
           </label>
         </div>
-        <div class="menu-button-row airband-apply-row"><button id="saveAirbandTuning" type="button">Apply Airband Tuning</button></div>
         <div class="airband-fast-search-controls">
-          <label>Scanner Search
-            <select id="airbandSearchMode">
-              <option value="traditional">Traditional Audio Samples</option>
-              <option value="fast_spectrum">Fast Spectrum Search — 120–130 MHz</option>
-            </select>
-          </label>
+          <div class="scanner-search-stack">
+            <label>Scanner Search
+              <select id="airbandSearchMode">
+                <option value="traditional">Traditional Audio Samples</option>
+                <option value="fast_spectrum" selected>Fast Spectrum Search — 120–130 MHz</option>
+              </select>
+            </label>
+            <button id="saveAirbandTuning" type="button">Apply Airband Tuning</button>
+          </div>
           <label>Carrier Trigger
             <select id="airbandSpectrumMargin">
               <option value="4">Very High — +4 dB</option>
@@ -424,7 +429,7 @@ body { padding: 0; }
         <h4>Map History</h4>
         <div class="menu-inline-setting history-setting">
           <label>Browser Trails
-            <select id="trailRetention"><option value="15">15 minutes</option><option value="60" selected>1 hour</option><option value="240">4 hours</option><option value="0">Until cleared</option></select>
+            <select id="trailRetention"><option value="active" selected>While Visible / Active — save 4 hours</option><option value="15">Show 15 minutes</option><option value="60">Show 1 hour</option><option value="240">Show 4 hours</option></select>
           </label>
           <button id="erasePiTrails" class="stop" type="button">Erase History</button>
         </div>
@@ -611,9 +616,12 @@ let receiverLocationPickActive = false;
 let receiverLocationPreview = null;
 const TRAIL_STORAGE_KEY = 'rtlPiAdsbTrailHistoryV1';
 const TRAIL_RETENTION_KEY = 'rtlPiAdsbTrailRetentionMinutes';
+const TRAIL_DISPLAY_MODE_KEY = 'rtlAdsbTrailDisplayModeV1';
 const TRAIL_CLEARED_AT_KEY = 'rtlPiAdsbTrailClearedAtV1';
 let aircraftTrailHistory = new Map();
-let aircraftTrailRetentionMinutes = Number(localStorage.getItem(TRAIL_RETENTION_KEY) || '60');
+let aircraftTrailRetentionMinutes = 240;
+let aircraftTrailDisplayMode = localStorage.getItem(TRAIL_DISPLAY_MODE_KEY) || 'active';
+if (aircraftTrailDisplayMode !== 'active' && aircraftTrailDisplayMode !== 'history') aircraftTrailDisplayMode = 'active';
 let aircraftTrailClearedAt = Number(localStorage.getItem(TRAIL_CLEARED_AT_KEY) || '0');
 
 function el(id) { return document.getElementById(id); }
@@ -869,6 +877,7 @@ function saveTrailHistory() {
       localStorage.removeItem(TRAIL_STORAGE_KEY);
     }
     localStorage.setItem(TRAIL_RETENTION_KEY, String(aircraftTrailRetentionMinutes));
+    localStorage.setItem(TRAIL_DISPLAY_MODE_KEY, aircraftTrailDisplayMode);
   } catch (_) {
     setMessage('mapMessage', 'Map is live, but browser storage could not save aircraft trails.', 'warning');
   }
@@ -883,12 +892,15 @@ function loadTrailHistory() {
     localStorage.removeItem(TRAIL_STORAGE_KEY);
   }
 }
+function removeTrailLayersForAircraft(key) {
+  if (!aircraftMap) return;
+  const segments = aircraftTrailSegments.get(key) || [];
+  for (const segment of segments) aircraftMap.removeLayer(segment);
+  aircraftTrailSegments.delete(key);
+}
 function removeTrailLayers() {
   if (!aircraftMap) return;
-  for (const segments of aircraftTrailSegments.values()) {
-    for (const segment of segments) aircraftMap.removeLayer(segment);
-  }
-  aircraftTrailSegments.clear();
+  for (const key of Array.from(aircraftTrailSegments.keys())) removeTrailLayersForAircraft(key);
 }
 function formatTrailLastSeen(timestamp) {
   const milliseconds = Number(timestamp);
@@ -972,12 +984,15 @@ function addTrailSegment(key, prior, current) {
   while (segments.length > 1440) aircraftMap.removeLayer(segments.shift());
   aircraftTrailSegments.set(key, segments);
 }
-function renderStoredTrails() {
+function renderStoredTrails(activeKeys = null) {
   if (!aircraftMap) return;
   removeTrailLayers();
   aircraftLastPositions.clear();
   pruneTrailHistory();
+  if (aircraftTrailDisplayMode === 'active' && !activeKeys) return;
+  const allowedKeys = activeKeys ? new Set(Array.from(activeKeys, key => String(key))) : null;
   for (const [key, points] of aircraftTrailHistory.entries()) {
+    if (allowedKeys && !allowedKeys.has(String(key))) continue;
     for (let index = 1; index < points.length; index += 1) {
       addTrailSegment(key, points[index - 1], points[index]);
     }
@@ -1000,13 +1015,13 @@ function recordTrailPoint(key, point, altitude, aircraft) {
     hex: aircraft && aircraft.hex ? String(aircraft.hex).toUpperCase() : String(key).toUpperCase(),
     track: aircraft ? aircraft.track : null
   };
-  if (previous) addTrailSegment(key, previous, current);
+  if (previous && (aircraftTrailDisplayMode !== 'active' || aircraftMapMarkers.has(key))) addTrailSegment(key, previous, current);
   points.push(current);
   aircraftTrailHistory.set(key, points);
   aircraftLastPositions.set(key, point);
   saveTrailHistory();
 }
-async function loadPiTrailHistory(restoreCleared = false) {
+async function loadTrailHistoryFromServer(restoreCleared = false) {
   try {
     const response = await fetch('/api/trails/history', {cache: 'no-store'});
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -1049,40 +1064,53 @@ async function loadPiTrailHistory(restoreCleared = false) {
       }
     }
 
+    if (restoreCleared) {
+      aircraftTrailDisplayMode = 'history';
+      aircraftTrailRetentionMinutes = 240;
+      if (el('trailRetention')) el('trailRetention').value = '240';
+    }
     saveTrailHistory();
-    renderStoredTrails();
+    renderStoredTrails(restoreCleared ? null : new Set(aircraftMapMarkers.keys()));
 
     const afterCount = Array.from(aircraftTrailHistory.values())
       .reduce((total, points) => total + points.length, 0);
     restoredPointCount = Math.max(0, afterCount - beforeCount);
 
     if (!serverPointCount) {
-      setMessage('mapMessage', 'Pi trail collector has no saved positioned aircraft yet.', '');
+      setMessage('mapMessage', 'No saved positioned aircraft trail history yet.', '');
     } else if (restoreCleared) {
       setMessage('mapMessage',
-        `Restored Pi history: ${serverPointCount} stored points across ${Object.keys(serverTrails).length} aircraft; ${restoredPointCount} points were newly added to this map.`,
+        `Restored history: ${serverPointCount} stored points across ${Object.keys(serverTrails).length} aircraft; ${restoredPointCount} points were newly added to this map.`,
         'good');
     } else if (hiddenByClearCount) {
       setMessage('mapMessage',
-        `Pi has ${serverPointCount} stored points, but ${hiddenByClearCount} pre-clear points remain hidden. Click Restore History to display them again.`,
+        `History has ${serverPointCount} stored points, but ${hiddenByClearCount} pre-clear points remain hidden. Click Restore History to display them again.`,
         'warning');
     } else {
       setMessage('mapMessage',
-        `Loaded Pi history: ${serverPointCount} stored points across ${Object.keys(serverTrails).length} aircraft; ${restoredPointCount} points were newly added.`,
+        `Loaded history: ${serverPointCount} stored points across ${Object.keys(serverTrails).length} aircraft; ${restoredPointCount} points were newly added.`,
         'good');
     }
   } catch (error) {
-    setMessage('mapMessage', `Pi trail history unavailable: ${error.message}`, 'error');
+    setMessage('mapMessage', `Trail history unavailable: ${error.message}`, 'error');
   }
 }
 
 function changeTrailRetention() {
-  aircraftTrailRetentionMinutes = Number(el('trailRetention').value);
+  const value = el('trailRetention').value;
+  if (value === 'active') {
+    aircraftTrailDisplayMode = 'active';
+    aircraftTrailRetentionMinutes = 240;
+    saveTrailHistory();
+    renderStoredTrails(new Set(aircraftMapMarkers.keys()));
+    setMessage('mapMessage', 'Trails show only while aircraft are visible or active. History is retained for up to 4 hours and can be restored.', 'good');
+    return;
+  }
+  aircraftTrailDisplayMode = 'history';
+  aircraftTrailRetentionMinutes = Math.min(240, Math.max(15, Number(value) || 240));
   saveTrailHistory();
   renderStoredTrails();
-  setMessage('mapMessage',
-    aircraftTrailRetentionMinutes ? `Trail history retained for ${aircraftTrailRetentionMinutes} minutes in this browser.` : 'Trail history retained in this browser until cleared.',
-    'good');
+  setMessage('mapMessage', `Showing stored trails from the last ${aircraftTrailRetentionMinutes} minutes.`, 'good');
 }
 
 function updateAircraftMap(aircraftRecords) {
@@ -1118,6 +1146,7 @@ function updateAircraftMap(aircraftRecords) {
       aircraftMap.removeLayer(marker);
       aircraftMapMarkers.delete(key);
       aircraftLastPositions.delete(key);
+      if (aircraftTrailDisplayMode === 'active') removeTrailLayersForAircraft(key);
     }
   }
 
@@ -1154,14 +1183,14 @@ function clearAircraftTrails() {
 
   setMessage(
     'mapMessage',
-    'Display cleared. Pi history is still stored; click Restore History to show it again.',
+    'Display cleared. Trail history is still stored for up to 4 hours; click Restore History to show it again.',
     'good'
   );
 }
 
-async function erasePiTrailHistory() {
+async function eraseTrailHistory() {
   const confirmed = window.confirm(
-    'Erase all Pi-stored aircraft trail history collected so far? This cannot be restored.'
+    'Erase all stored aircraft trail history collected so far? This cannot be restored.'
   );
   if (!confirmed) return;
 
@@ -1172,7 +1201,7 @@ async function erasePiTrailHistory() {
   localStorage.setItem(TRAIL_CLEARED_AT_KEY, String(aircraftTrailClearedAt));
   localStorage.removeItem(TRAIL_STORAGE_KEY);
 
-  setMessage('mapMessage', 'Erasing browser and Pi-stored aircraft trails...', 'warning');
+  setMessage('mapMessage', 'Erasing browser and stored aircraft trails...', 'warning');
   try {
     const response = await fetch('/api/trails/clear', {method: 'POST', cache: 'no-store'});
     const result = await response.json();
@@ -1181,13 +1210,13 @@ async function erasePiTrailHistory() {
     localStorage.setItem(TRAIL_CLEARED_AT_KEY, String(aircraftTrailClearedAt));
     setMessage(
       'mapMessage',
-      'Pi history erased. Only new post-erase movement will be retained.',
+      'Stored history erased. Only new post-erase movement will be retained.',
       'good'
     );
   } catch (error) {
     setMessage(
       'mapMessage',
-      `Display cleared, but Pi history erase failed: ${error.message}`,
+      `Display cleared, but stored history erase failed: ${error.message}`,
       'error'
     );
   }
@@ -2776,8 +2805,8 @@ function bindControls() {
   el('fitAircraftMap').addEventListener('click', fitAircraftMap);
   el('centerReceiverMap').addEventListener('click', centerReceiverMap);
   el('clearAircraftTrails').addEventListener('click', clearAircraftTrails);
-  el('erasePiTrails').addEventListener('click', erasePiTrailHistory);
-  el('loadPiTrails').addEventListener('click', () => loadPiTrailHistory(true));
+  el('erasePiTrails').addEventListener('click', eraseTrailHistory);
+  el('loadPiTrails').addEventListener('click', () => loadTrailHistoryFromServer(true));
   el('trailRetention').addEventListener('change', changeTrailRetention);
   for (const id of ['locationName', 'locationLatitude', 'locationLongitude', 'locationRadius']) {
     el(id).addEventListener('input', () => { el('locationName').dataset.edited = 'true'; });
@@ -2802,11 +2831,11 @@ document.addEventListener('keydown', event => {
 document.addEventListener('DOMContentLoaded', () => {
   initializeAircraftMap();
   loadTrailHistory();
-  el('trailRetention').value = String(aircraftTrailRetentionMinutes);
-  renderStoredTrails();
+  el('trailRetention').value = aircraftTrailDisplayMode === 'active' ? 'active' : String(aircraftTrailRetentionMinutes);
+  renderStoredTrails(new Set(aircraftMapMarkers.keys()));
   bindControls();
   loadAirlabsSettings();
-  loadPiTrailHistory();
+  loadTrailHistoryFromServer();
   updateStatus();
   updateAircraft();
   window.setInterval(updateStatus, 2000);
@@ -2829,7 +2858,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const settings = await response.json();
     byId("airbandActivityThreshold").value = String(settings.airband_activity_threshold_rms);
     byId("airbandRfGain").value = Number(settings.airband_rf_gain_db).toFixed(1);
-    byId("airbandSearchMode").value = settings.airband_search_mode || "traditional";
+    byId("airbandSearchMode").value = settings.airband_search_mode || "fast_spectrum";
     byId("airbandSpectrumMargin").value = String(settings.airband_spectrum_margin_db == null ? 8 : settings.airband_spectrum_margin_db);
     renderBlockedAirbandFrequencies(settings);
     const search = settings.airband_search_mode === "fast_spectrum" ? "Fast 120–130 MHz" : "Traditional";

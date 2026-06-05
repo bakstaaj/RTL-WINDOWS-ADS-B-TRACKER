@@ -62,17 +62,17 @@ NOAA_FREQUENCIES = [
     162500000, 162525000, 162550000,
 ]
 DEFAULT_RADIUS_MILES = 100.0
-DEFAULT_AIRBAND_ACTIVITY_RMS = 650.0
+DEFAULT_AIRBAND_ACTIVITY_RMS = 1300.0
 DEFAULT_AIRBAND_RF_GAIN_DB = float(AIRBAND_LIVE_AUDIO_PROFILE.get("gain_db", 40.2))
 MIN_AIRBAND_ACTIVITY_RMS = 100.0
 MAX_AIRBAND_ACTIVITY_RMS = 5000.0
 MIN_AIRBAND_RF_GAIN_DB = 0.0
 MAX_AIRBAND_RF_GAIN_DB = 49.6
-DEFAULT_AIRBAND_SEARCH_MODE = "traditional"
+DEFAULT_AIRBAND_SEARCH_MODE = "fast_spectrum"
 DEFAULT_AIRBAND_SPECTRUM_MARGIN_DB = 8.0
 MIN_AIRBAND_SPECTRUM_MARGIN_DB = 2.0
 MAX_AIRBAND_SPECTRUM_MARGIN_DB = 30.0
-DEFAULT_AIRBAND_PLAYBACK_SQUELCH_RMS = 0.0
+DEFAULT_AIRBAND_PLAYBACK_SQUELCH_RMS = 1300.0
 MIN_AIRBAND_PLAYBACK_SQUELCH_RMS = 0.0
 MAX_AIRBAND_PLAYBACK_SQUELCH_RMS = 5000.0
 AIRBAND_PLAYBACK_SQUELCH_STEP_RMS = 100.0
@@ -1906,7 +1906,7 @@ class PiPortHandler(BaseHTTPRequestHandler):
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="RTL-Windows-ADS-B-Tracker Raspberry Pi UI port backend")
-    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8090)
     parser.add_argument("--dump-http-port", type=int, default=18080)
     parser.add_argument("--settings-file")
