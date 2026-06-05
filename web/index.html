@@ -1455,7 +1455,37 @@ function routeOperatorFromAdsbdb(route) {
     source: 'ADSBDB route airline'
   };
 }
-async function fetchOperatorByCallsignPrefix(callsign) {
+let localOperatorPrefixLookupPromise = null;
+async function loadLocalOperatorPrefixLookup() {
+  if (!localOperatorPrefixLookupPromise) {
+    localOperatorPrefixLookupPromise = fetch('/api/operator-prefixes.json', {cache: 'no-store'})
+      .then(response => response.ok ? response.json() : {operators: {}})
+      .catch(() => ({operators: {}}));
+  }
+  return localOperatorPrefixLookupPromise;
+}
+function operatorMatchFromRecord(prefix, record, source) {
+  if (!record) return null;
+  const normalized = typeof record === 'string' ? {name: record} : record;
+  const name = String(normalized.name || normalized.operator || '').trim();
+  if (!name) return null;
+  return {
+    name,
+    icao: String(normalized.icao || prefix).trim().toUpperCase(),
+    iata: String(normalized.iata || '').trim().toUpperCase(),
+    telephony: String(normalized.telephony || '').trim(),
+    category: String(normalized.category || '').trim(),
+    source
+  };
+}
+async function fetchLocalOperatorByCallsignPrefix(callsign) {
+  const prefix = airlinePrefixFromCallsign(callsign);
+  if (!prefix) return null;
+  const payload = await loadLocalOperatorPrefixLookup();
+  const operators = payload && payload.operators && typeof payload.operators === 'object' ? payload.operators : {};
+  return operatorMatchFromRecord(prefix, operators[prefix], 'local ICAO-prefix table');
+}
+async function fetchAdsbdbOperatorByCallsignPrefix(callsign) {
   const prefix = airlinePrefixFromCallsign(callsign);
   if (!prefix) return null;
   const response = await fetch(`https://api.adsbdb.com/v0/airline/${encodeURIComponent(prefix)}`, {cache: 'no-store'});
@@ -1464,22 +1494,21 @@ async function fetchOperatorByCallsignPrefix(callsign) {
   const rows = payload && payload.response;
   const candidates = Array.isArray(rows) ? rows : (rows && typeof rows === 'object' ? [rows] : []);
   const exact = candidates.find(item => String(item.icao || '').toUpperCase() === prefix) || candidates[0];
-  const name = exact ? String(exact.name || '').trim() : '';
-  if (!name) return null;
-  return {
-    name,
-    icao: String(exact.icao || prefix).trim().toUpperCase(),
-    iata: String(exact.iata || '').trim().toUpperCase(),
-    source: 'ADSBDB ICAO-prefix fallback'
-  };
+  return operatorMatchFromRecord(prefix, exact, 'ADSBDB ICAO-prefix fallback');
+}
+async function fetchOperatorByCallsignPrefix(callsign) {
+  const localMatch = await fetchLocalOperatorByCallsignPrefix(callsign);
+  if (localMatch) return localMatch;
+  return fetchAdsbdbOperatorByCallsignPrefix(callsign);
 }
 function displayOperatorMatch(match) {
   if (!match || !match.name) return false;
   const code = match.icao || match.iata || '';
-  const qualifier = match.source === 'ADSBDB ICAO-prefix fallback'
-    ? ` — ${code || 'prefix'} fallback`
-    : '';
-  detailValue('detailOperator', `${match.name}${qualifier}`);
+  let qualifier = '';
+  if (match.source === 'local ICAO-prefix table') qualifier = ` — ${code || 'prefix'} local fallback`;
+  else if (match.source === 'ADSBDB ICAO-prefix fallback') qualifier = ` — ${code || 'prefix'} ADSBDB fallback`;
+  const extra = match.telephony ? ` (${match.telephony})` : '';
+  detailValue('detailOperator', `${match.name}${extra}${qualifier}`);
   return true;
 }
 async function applyAirlabsRouteToDetails(flight) {
