@@ -1742,6 +1742,12 @@ class PiPortHandler(BaseHTTPRequestHandler):
                 self.send_json({"configured": True, "receiver_location": self.settings.pi_location(), "default_airband_radius_miles": DEFAULT_RADIUS_MILES})
             elif request.path == "/api/settings/airband-scan":
                 self.send_json(self.settings.airband_tuning())
+            elif request.path == "/api/operator-prefixes.json":
+                operator_path = self.manager.root / "runtime" / "settings" / "operator_prefixes.json"
+                if operator_path.is_file():
+                    self.send_json(json.loads(operator_path.read_text(encoding="utf-8")))
+                else:
+                    self.send_json({"version": "missing", "operators": {}})
             elif request.path == "/api/airband/channels":
                 self.send_json(self.scan.nearby())
             elif request.path == "/api/airband/scan/status":

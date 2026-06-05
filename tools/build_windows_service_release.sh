@@ -163,6 +163,7 @@ copy_dependency_dlls "${RTL_POWER}" "${STAGE}/bin"
 copy_dependency_dlls "${ROOT}/dist/native-windows/rtl_dual_device_probe.exe" "${STAGE}/bin"
 copy_dependency_dlls "${ROOT}/dist/third_party/dump1090/dump1090.exe" "${STAGE}/bin"
 cp "${ROOT}/runtime/settings/faa_airband_catalog.json" "${STAGE}/seed/settings/faa_airband_catalog.json"
+cp "${ROOT}/runtime/settings/operator_prefixes.json" "${STAGE}/seed/settings/operator_prefixes.json"
 cp "${ROOT}/docs/WINDOWS_SERVICE_RELEASE.md" "${STAGE}/README_SERVICE_RELEASE.md"
 
 section "Download stable WinSW service executable and attribution"
@@ -184,7 +185,7 @@ cat > "${STAGE}/RTLADSBTrackerService.xml" <<'XML'
   <name>RTL ADS-B Tracker</name>
   <description>RTL-SDR ADS-B aircraft tracker with NOAA Weather and Airband audio services.</description>
   <executable>%BASE%\app\backend\RTLADSBTrackerBackend.exe</executable>
-  <arguments>--host 127.0.0.1 --port 8090 --dump-http-port 18080 --log-file "%ProgramData%\RTL ADS-B Tracker\logs\backend.log" --log-level INFO --autostart</arguments>
+  <arguments>--host 0.0.0.0 --port 8090 --dump-http-port 18080 --log-file "%ProgramData%\RTL ADS-B Tracker\logs\backend.log" --log-level INFO --autostart</arguments>
   <workingdirectory>%BASE%</workingdirectory>
   <env name="RTL_ADSB_TRACKER_ROOT" value="%BASE%"/>
   <env name="RTL_ADSB_TRACKER_RUNTIME" value="%ProgramData%\RTL ADS-B Tracker\runtime"/>
@@ -211,8 +212,21 @@ if not "%ERRORLEVEL%"=="0" (
 set "DATA=%ProgramData%\RTL ADS-B Tracker"
 if not exist "%DATA%\runtime\settings" mkdir "%DATA%\runtime\settings"
 if not exist "%DATA%\logs\service" mkdir "%DATA%\logs\service"
+
+set "FW_RULE=RTL ADS-B Tracker Web UI TCP 8090"
+netsh advfirewall firewall delete rule name="%FW_RULE%" >nul 2>&1
+netsh advfirewall firewall add rule name="%FW_RULE%" dir=in action=allow protocol=TCP localport=8090 profile=any >nul
+if errorlevel 1 (
+  echo WARNING: Could not create Windows Firewall rule for TCP port 8090.
+  echo You may need to allow inbound TCP 8090 manually.
+) else (
+  echo Added Windows Firewall rule: %FW_RULE%
+)
 if not exist "%DATA%\runtime\settings\faa_airband_catalog.json" (
   copy /Y "%~dp0seed\settings\faa_airband_catalog.json" "%DATA%\runtime\settings\faa_airband_catalog.json" >nul
+)
+if not exist "%DATA%\runtime\settings\operator_prefixes.json" (
+  copy /Y "%~dp0seed\settings\operator_prefixes.json" "%DATA%\runtime\settings\operator_prefixes.json" >nul
 )
 "%~dp0RTLADSBTrackerService.exe" install
 if errorlevel 1 exit /b %ERRORLEVEL%
@@ -220,7 +234,8 @@ if errorlevel 1 exit /b %ERRORLEVEL%
 if errorlevel 1 exit /b %ERRORLEVEL%
 echo.
 echo RTL ADS-B Tracker service installed and started.
-echo Browser URL: http://127.0.0.1:8090/
+echo Local browser URL: http://127.0.0.1:8090/
+echo LAN browser URL: http://%COMPUTERNAME%:8090/
 start "" "http://127.0.0.1:8090/"
 CMD
 
@@ -229,7 +244,10 @@ cat > "${STAGE}/uninstall_service.cmd" <<'CMD'
 cd /d "%~dp0"
 "%~dp0RTLADSBTrackerService.exe" stop
 "%~dp0RTLADSBTrackerService.exe" uninstall
+set "FW_RULE=RTL ADS-B Tracker Web UI TCP 8090"
+netsh advfirewall firewall delete rule name="%FW_RULE%" >nul 2>&1
 echo Service removed. ProgramData settings and logs were intentionally retained.
+echo Windows Firewall rule removed if it existed: %FW_RULE%
 CMD
 
 cat > "${STAGE}/restart_service.cmd" <<'CMD'
@@ -265,7 +283,8 @@ Built: $(date -Is 2>/dev/null || date)
 Service host: WinSW ${WINSW_VERSION}
 Backend bundle: PyInstaller onedir / native Windows Python
 Runtime data location: %ProgramData%\RTL ADS-B Tracker\runtime
-Application URL: http://127.0.0.1:8090/
+Local application URL: http://127.0.0.1:8090/
+LAN application URL: http://<tracker-windows-host>:8090/
 MANIFEST
 
 section "Create release ZIP"
