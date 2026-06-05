@@ -25,6 +25,7 @@ import io
 import json
 import logging
 import os
+import re
 from logging.handlers import RotatingFileHandler
 import math
 import mimetypes
@@ -1585,6 +1586,94 @@ class AirLabsIntegration:
         return result
 
 
+
+class AircraftHexDatabase:
+    """Serve compact local ICAO hex aircraft metadata imported from tar1090-db."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.lock = threading.Lock()
+        self._mtime: float | None = None
+        self._records: dict[str, dict[str, Any]] = {}
+        self._metadata: dict[str, Any] = {
+            "available": False,
+            "record_count": 0,
+            "source": "not loaded",
+        }
+
+    @staticmethod
+    def normalize_hex(value: Any) -> str:
+        text = re.sub(r"[^0-9A-Fa-f]", "", str(value or "")).upper()
+        return text if len(text) == 6 else ""
+
+    def _load_locked(self) -> None:
+        if not self.path.is_file():
+            self._mtime = None
+            self._records = {}
+            self._metadata = {
+                "available": False,
+                "record_count": 0,
+                "source": "missing",
+                "path": str(self.path),
+            }
+            return
+
+        stat = self.path.stat()
+        if self._mtime == stat.st_mtime:
+            return
+
+        payload = json.loads(self.path.read_text(encoding="utf-8"))
+        records = payload.get("aircraft", {})
+        if not isinstance(records, dict):
+            raise ValueError("aircraft_hex_db.json must contain an aircraft object.")
+
+        normalized: dict[str, dict[str, Any]] = {}
+        for key, value in records.items():
+            hex_code = self.normalize_hex(key)
+            if not hex_code or not isinstance(value, dict):
+                continue
+            record = dict(value)
+            record["hex"] = self.normalize_hex(record.get("hex") or hex_code) or hex_code
+            normalized[hex_code] = record
+
+        self._records = normalized
+        self._mtime = stat.st_mtime
+        self._metadata = {
+            "available": True,
+            "path": str(self.path),
+            "version": payload.get("version"),
+            "source": payload.get("source"),
+            "source_url": payload.get("source_url"),
+            "downloaded_utc": payload.get("downloaded_utc"),
+            "record_count": len(normalized),
+        }
+
+    def lookup(self, value: Any) -> dict[str, Any]:
+        hex_code = self.normalize_hex(value)
+        if not hex_code:
+            return {"matched": False, "error": "Enter a valid six-character ICAO hex code."}
+
+        with self.lock:
+            try:
+                self._load_locked()
+            except Exception as exc:
+                LOG.warning("Unable to load aircraft hex database %s: %s", self.path, exc)
+                return {
+                    "matched": False,
+                    "hex": hex_code,
+                    "error": str(exc),
+                    "database": {"available": False, "path": str(self.path)},
+                }
+
+            record = self._records.get(hex_code)
+            return {
+                "matched": record is not None,
+                "hex": hex_code,
+                "aircraft": record,
+                "database": self._metadata,
+            }
+
+
 class PiPortHandler(BaseHTTPRequestHandler):
     server_version = "RTLWindowsPiPortBackend/0.1"
 
@@ -1619,6 +1708,10 @@ class PiPortHandler(BaseHTTPRequestHandler):
     @property
     def airlabs(self) -> AirLabsIntegration:
         return self.server.airlabs  # type: ignore[attr-defined]
+
+    @property
+    def aircraft_db(self) -> AircraftHexDatabase:
+        return self.server.aircraft_db  # type: ignore[attr-defined]
 
     def log_message(self, fmt: str, *args: Any) -> None:
         # Normal polling requests are intentionally silent at INFO level.
@@ -1740,6 +1833,8 @@ class PiPortHandler(BaseHTTPRequestHandler):
                     self.send_json(self.normalize_pi_aircraft_payload(self.manager.query_aircraft()))
             elif request.path == "/api/settings/receiver":
                 self.send_json({"configured": True, "receiver_location": self.settings.pi_location(), "default_airband_radius_miles": DEFAULT_RADIUS_MILES})
+            elif request.path == "/api/aircraft/hex":
+                self.send_json(self.aircraft_db.lookup(query.get("hex", [""])[0]))
             elif request.path == "/api/settings/airband-scan":
                 self.send_json(self.settings.airband_tuning())
             elif request.path == "/api/operator-prefixes.json":
@@ -1958,6 +2053,7 @@ def main() -> int:
     catalog_path = Path(args.airband_catalog_file) if args.airband_catalog_file else runtime_root / "settings" / "faa_airband_catalog.json"
     catalog = AirbandCatalog(catalog_path)
     airlabs = AirLabsIntegration(settings_path.parent)
+    aircraft_db = AircraftHexDatabase(settings_path.parent / "aircraft_hex_db.json")
     manager = DecoderManager(root, args.dump_http_port, settings)
     audio = AudioManager(manager, 10)
     audio_ops = AudioOperations(audio)
@@ -1968,6 +2064,7 @@ def main() -> int:
     server.settings = settings  # type: ignore[attr-defined]
     server.catalog = catalog  # type: ignore[attr-defined]
     server.airlabs = airlabs  # type: ignore[attr-defined]
+    server.aircraft_db = aircraft_db  # type: ignore[attr-defined]
     server.audio = audio  # type: ignore[attr-defined]
     server.audio_ops = audio_ops  # type: ignore[attr-defined]
     server.scan = scan  # type: ignore[attr-defined]
