@@ -599,3 +599,18 @@ This project integrates or uses data/tools from several upstream sources:
 - tar1090/readsb-compatible aircraft database data for local ICAO hex enrichment where imported.
 
 Confirm upstream licenses and attribution requirements when publishing binary release packages.
+
+
+## Raspberry Pi v3.3.0 parity checkpoint
+
+This Windows build includes selected parity behavior from the Raspberry Pi v3.3.0 tracker baseline:
+
+- Split `web/index.html`, `web/app.css`, and `web/app.js` assets.
+- Local tar1090-style aircraft hex metadata lookup through `/api/aircraft/hex` and Pi-compatible `/api/aircraft/local`.
+- AirLabs route lookup normalization for ICAO callsigns with leading zero flight numbers.
+- Clearer route-source messages for private/charter/operator callsigns and registration-style tail-number callsigns.
+- Active map trail cleanup when aircraft leave the live aircraft set, while preserving stored history for Restore History.
+- Aircraft marker double-click selection/detail access using the same aircraft record used by the aircraft list.
+
+See `docs/WINDOWS_PI_V33_PORT_IMPLEMENTATION.md` for validation examples.
+

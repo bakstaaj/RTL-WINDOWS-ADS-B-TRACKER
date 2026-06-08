@@ -1587,6 +1587,185 @@ class AirLabsIntegration:
 
 
 
+
+
+# RTP-PI-V33-WINDOWS-PORT BEGIN
+# Compatibility helpers ported from the Raspberry Pi v3.3.0 route/identity behavior.
+# These are attached as an AirLabsIntegration method override so the existing
+# Windows backend remains otherwise unchanged.
+_RTP_V33_PRIVATE_ROUTE_PREFIXES = {
+    "KOW": "Baker Aviation / Rodeo",
+    "LYM": "Key Lime Air",
+    "LXJ": "Flexjet",
+    "EJA": "NetJets",
+    "XOJ": "XOJET",
+    "FTH": "Mountain Aviation",
+    "GAJ": "Wheels Up",
+    "WUP": "Wheels Up",
+    "JTL": "Jet Linx",
+    "TWY": "Solairus Aviation",
+    "PEG": "Pegasus Elite Aviation",
+    "XSR": "Executive Flight Services",
+}
+
+
+def _rtp_v33_callsign_variants(callsign: str) -> list[str]:
+    """Return the original ICAO callsign plus safe AirLabs retry variants."""
+    cleaned = "".join(ch for ch in str(callsign or "").upper().strip() if ch.isalnum())
+    variants: list[str] = []
+    if cleaned:
+        variants.append(cleaned)
+    match = re.match(r"^([A-Z]{2,4})0+([1-9][0-9A-Z]*)$", cleaned)
+    if match:
+        normalized = match.group(1) + match.group(2)
+        if normalized not in variants:
+            variants.append(normalized)
+    return variants
+
+
+def _rtp_v33_is_tail_number_callsign(callsign: str) -> bool:
+    value = "".join(ch for ch in str(callsign or "").upper().strip() if ch.isalnum() or ch == "-")
+    compact = value.replace("-", "")
+    if re.match(r"^N[1-9][0-9]{0,4}[A-Z]{0,2}$", compact):
+        return True
+    if re.match(r"^(C|CF|CG|G|D|F|I|EC|EI|OY|PH|HB|SE|LN|OH|OK|OM|SP|OE|VH|ZK|ZS)[A-Z]{3,5}$", compact):
+        return True
+    if re.match(r"^JA[0-9]{4}$", compact):
+        return True
+    if re.match(r"^HL[0-9]{4}$", compact):
+        return True
+    return False
+
+
+def _rtp_v33_route_no_match_message(callsign: str, provider: str = "AirLabs") -> tuple[str, str | None, str | None]:
+    value = "".join(ch for ch in str(callsign or "").upper().strip() if ch.isalnum() or ch == "-")
+    compact = value.replace("-", "")
+    if _rtp_v33_is_tail_number_callsign(value):
+        return (
+            f"Private/general aviation tail-number callsign - {value}; route not available from {provider}",
+            "tail_number",
+            None,
+        )
+    prefix = compact[:3]
+    operator = _RTP_V33_PRIVATE_ROUTE_PREFIXES.get(prefix)
+    if operator:
+        return (
+            f"Private/charter callsign - {operator}; route not available from {provider}",
+            "private_charter",
+            operator,
+        )
+    return (f"{provider} - no route match for {value or 'callsign'}", "no_match", None)
+
+
+def _rtp_v33_airlabs_fetch_route(self, callsign: str, base: dict[str, Any], key: str) -> dict[str, Any]:
+    query = urllib.parse.urlencode({"flight_icao": callsign, "api_key": key})
+    request = urllib.request.Request(
+        "https://airlabs.co/api/v9/flight?" + query,
+        headers={"Accept": "application/json", "User-Agent": "RTL-Windows-ADS-B-Tracker/pi-port-v3.3"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")[:240]
+        return {**base, "matched": False, "lookup_callsign": callsign, "message": f"AirLabs HTTP {exc.code}: {body}"}
+    except Exception as exc:
+        return {**base, "matched": False, "lookup_callsign": callsign, "message": f"AirLabs request failed: {exc}"}
+
+    if isinstance(payload, dict) and payload.get("error"):
+        error = payload["error"]
+        message = error.get("message") if isinstance(error, dict) else str(error)
+        return {**base, "matched": False, "lookup_callsign": callsign, "message": f"AirLabs error: {message}"}
+
+    record = payload.get("response") if isinstance(payload, dict) and isinstance(payload.get("response"), dict) else payload
+    if not isinstance(record, dict):
+        return {**base, "matched": False, "lookup_callsign": callsign, "message": f"No route record returned for {callsign}."}
+
+    fields = {
+        "flight_icao": record.get("flight_icao") or callsign,
+        "flight_iata": record.get("flight_iata"),
+        "departure_iata": record.get("dep_iata"),
+        "departure_icao": record.get("dep_icao"),
+        "arrival_iata": record.get("arr_iata"),
+        "arrival_icao": record.get("arr_icao"),
+        "registration": record.get("reg_number"),
+        "aircraft_icao": record.get("aircraft_icao"),
+        "status": record.get("status"),
+    }
+    matched = any(fields[name] for name in ("departure_iata", "departure_icao", "arrival_iata", "arrival_icao"))
+    return {
+        **base,
+        "matched": matched,
+        **fields,
+        "lookup_callsign": callsign,
+        "cache_hit": False,
+        "cache_age_seconds": 0,
+        "cache_ttl_seconds": self.CACHE_TTL_SECONDS,
+        "message": "Route fields returned." if matched else f"AirLabs returned no origin/destination for {callsign}.",
+    }
+
+
+def _rtp_v33_airlabs_lookup_route(self, flight: str) -> dict[str, Any]:
+    status = self.status()
+    key = self._api_key()
+    base = {
+        "provider": "AirLabs",
+        "diagnostic_only": True,
+        "configured": status["configured"],
+        "key_hint": status["key_hint"],
+    }
+    if not key:
+        return {**base, "matched": False, "message": "No readable AirLabs key was found in runtime/settings/airlabs_api.json."}
+
+    callsign = self._clean_callsign(flight)
+    if not callsign:
+        return {**base, "matched": False, "message": "Provide a commercial flight ICAO callsign, for example UAL1234."}
+
+    variants = _rtp_v33_callsign_variants(callsign)
+    last_result: dict[str, Any] | None = None
+    for variant in variants:
+        cached = self._load_cached(variant)
+        if cached is not None:
+            cached.update({
+                "requested_callsign": callsign,
+                "lookup_callsign": variant,
+                "matched_callsign": variant,
+                "normalized_lookup_used": variant != callsign,
+                "callsign_variants": variants,
+            })
+            return cached
+
+        result = _rtp_v33_airlabs_fetch_route(self, variant, base, key)
+        result.update({
+            "requested_callsign": callsign,
+            "lookup_callsign": variant,
+            "normalized_lookup_used": variant != callsign,
+            "callsign_variants": variants,
+        })
+        if result.get("matched"):
+            result["matched_callsign"] = variant
+            self._save_cached(variant, result)
+            return result
+        last_result = result
+
+    message, classification, operator = _rtp_v33_route_no_match_message(callsign, "AirLabs")
+    return {
+        **base,
+        "matched": False,
+        "requested_callsign": callsign,
+        "lookup_callsign": variants[-1] if variants else callsign,
+        "normalized_lookup_used": len(variants) > 1,
+        "callsign_variants": variants,
+        "route_classification": classification,
+        "classified_operator": operator,
+        "message": message,
+        "last_provider_message": (last_result or {}).get("message"),
+    }
+
+
+AirLabsIntegration.lookup_route = _rtp_v33_airlabs_lookup_route  # type: ignore[method-assign]
+# RTP-PI-V33-WINDOWS-PORT END
+
 class AircraftHexDatabase:
     """Serve compact local ICAO hex aircraft metadata imported from tar1090-db."""
 
@@ -1833,7 +2012,7 @@ class PiPortHandler(BaseHTTPRequestHandler):
                     self.send_json(self.normalize_pi_aircraft_payload(self.manager.query_aircraft()))
             elif request.path == "/api/settings/receiver":
                 self.send_json({"configured": True, "receiver_location": self.settings.pi_location(), "default_airband_radius_miles": DEFAULT_RADIUS_MILES})
-            elif request.path == "/api/aircraft/hex":
+            elif request.path in ("/api/aircraft/hex", "/api/aircraft/local"):
                 self.send_json(self.aircraft_db.lookup(query.get("hex", [""])[0]))
             elif request.path == "/api/settings/airband-scan":
                 self.send_json(self.settings.airband_tuning())
