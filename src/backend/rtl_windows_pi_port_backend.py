@@ -2000,12 +2000,49 @@ class PiPortHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         try:
             request = urlparse(self.path)
+
+            if request.path in ("/app.css", "/app.js"):
+                asset_name = request.path.lstrip("/")
+                asset_candidates = []
+                try:
+                    root_env = os.environ.get("RTL_ADSB_TRACKER_ROOT")
+                    if root_env:
+                        asset_candidates.append(Path(root_env) / "web" / asset_name)
+                except Exception:
+                    pass
+                try:
+                    asset_candidates.append(Path.cwd() / "web" / asset_name)
+                except Exception:
+                    pass
+                try:
+                    asset_candidates.append(Path(__file__).resolve().parents[2] / "web" / asset_name)
+                except Exception:
+                    pass
+                asset_path = next((p for p in asset_candidates if p.exists()), None)
+                if asset_path is None:
+                    self.send_json({"error": f"Static asset not found: {asset_name}"}, HTTPStatus.NOT_FOUND)
+                    return
+                body = asset_path.read_bytes()
+                content_type = "text/css; charset=utf-8" if asset_name.endswith(".css") else "application/javascript; charset=utf-8"
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             query = parse_qs(request.query)
             if request.path in ("/", "/index.html"):
                 self.send_file(self.manager.root / "web" / "index.html")
             elif request.path == "/api/status" or request.path == "/api/readsb/status.json":
                 self.send_json(self.port_status())
             elif request.path == "/api/aircraft.json":
+                if not self.manager.is_running():
+                    try:
+                        LOG.info("ADS-B decoder not available by process state; attempting on-demand start before aircraft response.")
+                        self.manager.start()
+                    except Exception as exc:
+                        LOG.warning("On-demand ADS-B decoder start failed before aircraft response: %s", exc)
                 if not self.manager.is_running():
                     self.send_json({"error": "ADS-B decoder is not running."}, HTTPStatus.SERVICE_UNAVAILABLE)
                 else:
@@ -2089,6 +2126,7 @@ class PiPortHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         try:
             request = urlparse(self.path)
+
             query = parse_qs(request.query)
             if request.path == "/api/settings/receiver":
                 location = self.settings.save_pi_location(self.read_json())

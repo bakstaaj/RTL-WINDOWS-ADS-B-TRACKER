@@ -1,72 +1,3212 @@
-"use strict";
 
-/* RTP-PI-V33-WINDOWS-PORT BEGIN */
-const RTP_V33_PRIVATE_CALLSIGN_PREFIXES={KOW:"Baker Aviation / Rodeo",LYM:"Key Lime Air",LXJ:"Flexjet",EJA:"NetJets",XOJ:"XOJET",FTH:"Mountain Aviation",GAJ:"Wheels Up",WUP:"Wheels Up",JTL:"Jet Linx",TWY:"Solairus Aviation",PEG:"Pegasus Elite Aviation",XSR:"Executive Flight Services"};
-function rtpV33CleanCallsign(value){return String(value||"").toUpperCase().trim().replace(/[^A-Z0-9-]/g,"");}
-function rtpV33CompactCallsign(value){return rtpV33CleanCallsign(value).replace(/-/g,"");}
-function rtpV33IsTailNumberCallsign(value){const v=rtpV33CleanCallsign(value),c=v.replace(/-/g,"");return /^N[1-9][0-9]{0,4}[A-Z]{0,2}$/.test(c)||/^(C|CF|CG|G|D|F|I|EC|EI|OY|PH|HB|SE|LN|OH|OK|OM|SP|OE|VH|ZK|ZS)[A-Z]{3,5}$/.test(c)||/^JA[0-9]{4}$/.test(c)||/^HL[0-9]{4}$/.test(c);}
-function rtpV33NormalizedCallsignVariants(value){const c=rtpV33CompactCallsign(value),variants=[];if(c)variants.push(c);const m=c.match(/^([A-Z]{2,4})0+([1-9][0-9A-Z]*)$/);if(m){const n=m[1]+m[2];if(!variants.includes(n))variants.push(n);}return variants;}
-function rtpV33RouteNoMatchSourceMessage(callsign,provider="AirLabs"){const v=rtpV33CleanCallsign(callsign),c=v.replace(/-/g,"");if(rtpV33IsTailNumberCallsign(v))return `Private/general aviation tail-number callsign - ${v}; route not available from ${provider}`;const operator=RTP_V33_PRIVATE_CALLSIGN_PREFIXES[c.slice(0,3)];if(operator)return `Private/charter callsign - ${operator}; route not available from ${provider}`;return `${provider} - no route match for ${v||"callsign"}`;}
-if(typeof window!=="undefined"){window.rtpV33IsTailNumberCallsign=rtpV33IsTailNumberCallsign;window.rtpV33NormalizedCallsignVariants=rtpV33NormalizedCallsignVariants;window.rtpV33RouteNoMatchSourceMessage=rtpV33RouteNoMatchSourceMessage;if(!window.isTailNumberCallsign)window.isTailNumberCallsign=rtpV33IsTailNumberCallsign;if(!window.routeNoMatchSourceMessage)window.routeNoMatchSourceMessage=rtpV33RouteNoMatchSourceMessage;if(!window.normalizedIcaoCallsignVariants)window.normalizedIcaoCallsignVariants=rtpV33NormalizedCallsignVariants;}
-/* RTP-PI-V33-WINDOWS-PORT END */
+// V9 DOM-based aircraft marker double-click bridge.
+// Uses the real map container id (#aircraftMap), stops Leaflet double-click
+// zoom at window capture, and reuses the existing aircraft-list click behavior.
+(function(){
+  if(window.__rtpV39DomAircraftMarkerDblclickInstalled)return;
+  window.__rtpV39DomAircraftMarkerDblclickInstalled=true;
 
-const DEFAULT_RECEIVER={latitude:38.7467,longitude:-105.1783,label:"Receiver"};
-const RINGS=[5,10,15,20,25,30,40,50],MAX_TRAIL=90;
-const state={map:null,receiver:DEFAULT_RECEIVER,receiverMarker:null,rings:[],markers:new Map(),trails:new Map(),trailLayers:new Map(),rows:new Map(),selected:null,fit:false,busy:false,locationDirty:false};
-const liveAudio={active:false,context:null,nextSequence:0,nextPlayTime:0,sources:new Set(),generation:0};
-const airbandSurvey={running:false,stopRequested:false,results:[],context:null,maxChannels:10,chunksPerChannel:2,plan:null,passes:[]};
-const airbandCapture={running:false,stopRequested:false,context:null,seconds:10,chunks:20};
-const num=v=>Number.isFinite(Number(v))?Number(v):null;
-const show=(v,d="—")=>v===undefined||v===null||v===""?d:String(v).trim();
-const safe=v=>show(v,"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
-const fmt=v=>num(v)===null?"—":num(v).toLocaleString();
-const id=a=>show(a.hex,"unknown").toLowerCase();
-const name=a=>show(a.flight,show(a.hex,"Unknown")).trim();
-const alt=a=>num(a.alt_baro??a.altitude);
-const pos=a=>num(a.lat)!==null&&num(a.lon)!==null?[num(a.lat),num(a.lon)]:null;
-function color(feet){if(feet===null)return"#b2c1cc";if(feet<5001)return"#38f45d";if(feet<10001)return"#176b30";if(feet<20001)return"#51c8f3";if(feet<30001)return"#1756ae";if(feet<40001)return"#c9a300";return"#f44336";}
-function initMap(){state.map=L.map("map").setView([state.receiver.latitude,state.receiver.longitude],9);if(state.map.doubleClickZoom)state.map.doubleClickZoom.disable();L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:18,attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'}).addTo(state.map);setReceiver(state.receiver);}
-function setReceiver(r){state.receiver=r||DEFAULT_RECEIVER;const p=[state.receiver.latitude,state.receiver.longitude];if(state.receiverMarker)state.receiverMarker.remove();state.rings.forEach(x=>x.remove());state.rings=[];state.receiverMarker=L.marker(p,{icon:L.divIcon({className:"",html:'<div class="receiver-dot"></div>',iconSize:[16,16],iconAnchor:[8,8]})}).addTo(state.map).bindPopup(safe(state.receiver.label));RINGS.forEach(mi=>state.rings.push(L.circle(p,{radius:mi*1609.344,color:"#607787",weight:1,dashArray:"5 5",fillOpacity:0}).addTo(state.map)));}
-function icon(a,selected){const track=num(a.track)??0;return L.divIcon({className:"",html:`<div class="aircraft-icon ${selected?"selected":""}" style="transform:rotate(${track}deg)">&#9992;</div>`,iconSize:selected?[30,30]:[26,26],iconAnchor:selected?[15,15]:[13,13]});}
-function selectAircraft(hex){state.selected=hex;state.markers.forEach((m,k)=>{const a=state.rows.get(k);if(!a)return;m.setIcon(icon(a,k===hex));if(k===hex)m.bindTooltip(name(a),{permanent:true,direction:"top",className:"plane-label"}).openTooltip();else m.unbindTooltip();});renderSelected();renderTable([...state.rows.values()].filter(pos));}
-function addTrail(a,p){const hex=id(a);let h=state.trails.get(hex)||[],last=h[h.length-1];if(!last||last[0]!==p[0]||last[1]!==p[1]){h.push([p[0],p[1],alt(a)]);h=h.slice(-MAX_TRAIL);state.trails.set(hex,h);}let layer=state.trailLayers.get(hex);if(!layer){layer=L.layerGroup().addTo(state.map);state.trailLayers.set(hex,layer);}layer.clearLayers();for(let i=1;i<h.length;i++)L.polyline([[h[i-1][0],h[i-1][1]],[h[i][0],h[i][1]]],{color:color(h[i][2]),weight:hex===state.selected?4:3,opacity:.86}).addTo(layer);}
-function renderSelected(){const el=document.getElementById("selected-details"),a=state.selected?state.rows.get(state.selected):null;if(!a){el.className="placeholder";el.textContent="Select an aircraft marker or table row.";return;}el.className="details";el.innerHTML=`<div><b>Flight / Hex</b>${safe(name(a))}</div><div><b>ICAO Hex</b>${safe(id(a))}</div><div><b>Altitude</b>${fmt(alt(a))} ft</div><div><b>Speed</b>${fmt(a.speed??a.gs)} kt</div><div><b>Track</b>${fmt(a.track)}°</div><div><b>Seen</b>${fmt(a.seen)} s</div>`;}
-function renderTable(rows){rows.sort((a,b)=>(alt(b)??-1)-(alt(a)??-1));const body=document.getElementById("aircraft-rows");if(!rows.length){body.innerHTML='<tr><td class="empty-row" colspan="4">Waiting for positions…</td></tr>';return;}body.innerHTML=rows.map(a=>`<tr data-hex="${safe(id(a))}" class="${id(a)===state.selected?"selected":""}"><td>${safe(name(a))}</td><td>${fmt(alt(a))}</td><td>${fmt(a.speed??a.gs)}</td><td>${fmt(a.seen)}s</td></tr>`).join("");body.querySelectorAll("tr[data-hex]").forEach(row=>row.addEventListener("click",()=>selectAircraft(row.dataset.hex)));}
-function rtpV33OpenAircraftDetailsFromMap(hex,a,event){if(event&&typeof L!=="undefined"&&L.DomEvent)L.DomEvent.stop(event);selectAircraft(hex);const latest=(state.rows&&state.rows.get(hex))||a;if(typeof window.openAircraftDetails==="function")window.openAircraftDetails(latest);else if(typeof window.showAircraftDetails==="function")window.showAircraftDetails(latest);else if(typeof renderSelected==="function")renderSelected();}function updateAircraft(data){const all=Array.isArray(data.aircraft)?data.aircraft:[],located=all.filter(pos),active=new Set();state.rows=new Map(all.map(a=>[id(a),a]));located.forEach(a=>{const hex=id(a),p=pos(a);active.add(hex);let m=state.markers.get(hex);if(!m){m=L.marker(p,{icon:icon(a,hex===state.selected)}).addTo(state.map).on("click",()=>selectAircraft(hex)).on("dblclick",event=>rtpV33OpenAircraftDetailsFromMap(hex,a,event));state.markers.set(hex,m);}else{m.setLatLng(p);m.setIcon(icon(a,hex===state.selected));}m.bindPopup(`<strong>${safe(name(a))}</strong><br>Hex: ${safe(hex)}<br>Altitude: ${fmt(alt(a))} ft`);addTrail(a,p);});state.markers.forEach((m,hex)=>{if(!active.has(hex)){m.remove();state.markers.delete(hex);const layer=state.trailLayers.get(hex);if(layer){layer.clearLayers();layer.remove();state.trailLayers.delete(hex);}}});if(!state.fit&&located.length){const b=L.latLngBounds([[state.receiver.latitude,state.receiver.longitude]]);located.forEach(a=>b.extend(pos(a)));state.map.fitBounds(b.pad(.15),{maxZoom:11});state.fit=true;}document.getElementById("position-count").textContent=String(located.length);renderSelected();renderTable(located);}
-function renderStatus(s){const d=s.decoder||{},r=s.receiver_roles||{},loc=s.receiver_location||DEFAULT_RECEIVER;if(loc.latitude!==state.receiver.latitude||loc.longitude!==state.receiver.longitude)setReceiver(loc);if(!state.locationDirty){document.getElementById("location-label").value=loc.label||"";document.getElementById("location-latitude").value=loc.latitude;document.getElementById("location-longitude").value=loc.longitude;}const pill=document.getElementById("decoder-pill");pill.textContent=d.running?"Decoder running":"Decoder stopped";pill.className=`pill ${d.running?"running":"stopped"}`;document.getElementById("messages").textContent=fmt(d.messages);document.getElementById("aircraft-count").textContent=fmt(d.aircraft_count);document.getElementById("adsb-role").textContent=r.adsb?`${r.adsb.serial} / #${r.adsb.index}`:"—";document.getElementById("audio-role").textContent=r.audio?`${r.audio.serial} / #${r.audio.index}`:"—";document.getElementById("profile").textContent=d.profile?`${d.profile.sample_rate_sps/1000000} MS/s · ${d.profile.gain_db} dB`:"—";document.getElementById("receiver-label").textContent=loc.label||"Receiver";document.getElementById("last-update").textContent=`Updated ${new Date().toLocaleTimeString()}`;}
-function airbandCell(row,text){const cell=document.createElement("td");cell.textContent=text;row.appendChild(cell);return cell;}
-function renderAirband(data){const summary=document.getElementById("airband-summary"),body=document.getElementById("airband-body"),badge=document.getElementById("airband-source");body.textContent="";if(!data.catalog_available){badge.textContent="Not imported";summary.textContent=data.message||"FAA frequency catalog is not available.";return;}badge.textContent="FAA NASR";const dates=(data.effective_dates||[]).join(", ");summary.textContent=`${data.matching_channel_count} channels within ${data.radius_miles} mi · showing ${data.channels.length} · effective ${dates}`;data.channels.forEach(channel=>{const row=document.createElement("tr");airbandCell(row,`${show(channel.distance_miles,"—")} mi`);airbandCell(row,Number(channel.frequency_mhz).toFixed(3));const use=airbandCell(row,channel.frequency_use||channel.category);const cat=document.createElement("span");cat.className="category";cat.textContent=channel.category;use.appendChild(cat);const facility=airbandCell(row,channel.serviced_facility_name||channel.serviced_facility||"—");const place=document.createElement("span");place.className="category";place.textContent=[channel.city,channel.state].filter(Boolean).join(", ");facility.appendChild(place);const action=document.createElement("td");const listen=document.createElement("button");listen.className="airband-listen secondary";listen.textContent="Listen";listen.onclick=()=>startAirbandLive(channel);action.appendChild(listen);const capture=document.createElement("button");capture.className="airband-capture secondary";capture.textContent="Capture 10s";capture.onclick=()=>captureAirbandSample(channel);action.appendChild(capture);row.appendChild(action);body.appendChild(row);});}
-function readAirbandSurveyPlan(){const selected=document.getElementById("survey-candidate-threshold").value,variation=document.getElementById("survey-variation-threshold").value,segmentVariation=document.getElementById("survey-segment-variation-threshold").value;return{radiusMiles:Number(document.getElementById("survey-radius-miles").value),maxChannels:Number(document.getElementById("survey-max-channels").value),chunksPerChannel:Number(document.getElementById("survey-sample-chunks").value),category:document.getElementById("survey-category").value,candidateMultiplier:selected==="off"?null:Number(selected),passCount:Number(document.getElementById("survey-pass-count").value),variationMultiplier:variation==="off"?null:Number(variation),segmentVariationMultiplier:segmentVariation==="off"?null:Number(segmentVariation)};}
-function surveyCategoryMatch(channel,category){if(category==="all")return true;const tag=(channel.category||"").toLowerCase(),use=(channel.frequency_use||"").toLowerCase();if(category==="weather")return tag==="weather"||tag==="atis"||use.includes("awos")||use.includes("asos")||use.includes("atis");if(category==="local")return tag==="ctaf"||tag==="unicom"||use.includes("ctaf")||use.includes("unicom");if(category==="control")return["tower","ground","clearance","approach","departure"].includes(tag)||/(twr|lcl|gnd|ground|apch|approach|dep|delivery)/.test(use);return true;}
-function surveyCategoryLabel(category){return{all:"All",weather:"Weather / ATIS",local:"CTAF / UNICOM",control:"Tower / Ground / Approach"}[category]||"All";}
-function setAirbandSurveyControls(running){airbandSurvey.running=running;document.getElementById("run-airband-survey").disabled=running||airbandCapture.running;document.getElementById("stop-airband-survey").disabled=!running;document.getElementById("export-airband-survey").disabled=running||!airbandSurvey.results.length;document.querySelectorAll(".airband-listen,.survey-review-listen,.airband-capture,.survey-review-capture").forEach(button=>button.disabled=running||airbandCapture.running);}
-function surveyMedianRms(results){const values=results.map(item=>item.rms).sort((a,b)=>a-b);if(!values.length)return 0;const middle=Math.floor(values.length/2);return values.length%2?values[middle]:(values[middle-1]+values[middle])/2;}
-function surveyVariationRatio(item){const values=item.rmsValues||[];if(values.length<2)return 1;return Math.max(...values)/Math.max(1,Math.min(...values));}
-function surveySegmentVariationRatio(item){const values=item.segmentVariationRatios||[];return values.length?Math.max(...values):1;}
-function surveyCsvField(value){const text=value===null||value===undefined?"":String(value);return `"${text.replace(/"/g,'""')}"`;}
-function surveyReviewFlags(item,plan){return{above:(item.candidateHits||0)>0,repeat:(item.candidateHits||0)>1,pass:plan.variationMultiplier!==null&&surveyVariationRatio(item)>=plan.variationMultiplier,segment:plan.segmentVariationMultiplier!==null&&surveySegmentVariationRatio(item)>=plan.segmentVariationMultiplier};}
-function surveyResultLabel(item,plan){const flags=surveyReviewFlags(item,plan);if(flags.repeat)return"Repeat hit";if(flags.segment)return"Segment change";if(flags.pass)return"Pass change";if(flags.above)return"Above level";return"Review";}
-function surveyReviewReason(item,plan){const flags=surveyReviewFlags(item,plan),reasons=[];if(flags.repeat)reasons.push("Repeat hit");else if(flags.above)reasons.push("Above level");if(flags.pass)reasons.push("Pass change");if(flags.segment)reasons.push("Segment change");return reasons.length?reasons.join(" + "):"No mark";}
-function surveyResultFilterMatch(item,plan,filter){const flags=surveyReviewFlags(item,plan);if(filter==="marked")return flags.above||flags.pass||flags.segment;if(filter==="above")return flags.above;if(filter==="repeat")return flags.repeat;if(filter==="pass")return flags.pass;if(filter==="segment")return flags.segment;return true;}
-function exportAirbandSurveyCsv(){if(!airbandSurvey.results.length)return;const plan=airbandSurvey.plan||{category:"all",radiusMiles:"",chunksPerChannel:"",passCount:"",candidateMultiplier:null,variationMultiplier:null};const ranked=airbandSurvey.results.slice().sort((a,b)=>(b.candidateHits||0)-(a.candidateHits||0)||surveyVariationRatio(b)-surveyVariationRatio(a)||b.rms-a.rms),headers=["exported_utc","rank","frequency_mhz","frequency_hz","facility_id","facility_name","frequency_use","category","distance_miles","average_rms","candidate_hits","passes_measured","pass_variation_ratio","segment_variation_ratio_max","result_label","review_reasons","result_filter","survey_category","survey_radius_miles","sample_seconds_per_channel","survey_passes","candidate_multiplier","pass_variation_multiplier","segment_variation_multiplier","pass_rms_values","segment_variation_ratios"];const exported=new Date().toISOString(),rows=ranked.map((item,index)=>[exported,index+1,Number(item.channel.frequency_mhz).toFixed(3),item.channel.frequency_hz,item.channel.serviced_facility||"",item.channel.serviced_facility_name||"",item.channel.frequency_use||"",item.channel.category||"",item.channel.distance_miles??"",item.rms.toFixed(2),item.candidateHits||0,item.measurementCount||0,surveyVariationRatio(item).toFixed(3),surveySegmentVariationRatio(item).toFixed(3),surveyResultLabel(item,plan),surveyReviewReason(item,plan),document.getElementById("survey-result-filter").value,surveyCategoryLabel(plan.category),plan.radiusMiles,(Number(plan.chunksPerChannel||0)*.5).toFixed(1),plan.passCount,plan.candidateMultiplier??"off",plan.variationMultiplier??"off",plan.segmentVariationMultiplier??"off",(item.rmsValues||[]).map(value=>Number(value).toFixed(2)).join(";"),(item.segmentVariationRatios||[]).map(value=>Number(value).toFixed(3)).join(";")]),csv=[headers,...rows].map(row=>row.map(surveyCsvField).join(",")).join("\r\n"),blob=new Blob([csv],{type:"text/csv;charset=utf-8"}),url=URL.createObjectURL(blob),link=document.createElement("a"),date=exported.replace(/[:.]/g,"-");link.href=url;link.download=`airband_survey_${date}.csv`;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);document.getElementById("airband-survey-note").textContent=`Exported ${ranked.length} Survey Scan result${ranked.length===1?"":"s"} to ${link.download}. Results remain manual-review evidence only.`;}
-function renderSurveyResults(message){const panel=document.getElementById("airband-survey-results");panel.classList.add("ready");if(message){panel.innerHTML="";const status=document.createElement("div");status.className="survey-progress";status.textContent=message;panel.appendChild(status);return;}panel.innerHTML="";const plan=airbandSurvey.plan||{candidateMultiplier:null,passCount:1,variationMultiplier:null,segmentVariationMultiplier:null},allRanked=airbandSurvey.results.slice().sort((a,b)=>(b.candidateHits||0)-(a.candidateHits||0)||surveySegmentVariationRatio(b)-surveySegmentVariationRatio(a)||surveyVariationRatio(b)-surveyVariationRatio(a)||b.rms-a.rms),filter=document.getElementById("survey-result-filter").value,ranked=allRanked.filter(item=>surveyResultFilterMatch(item,plan,filter));const summary=document.createElement("div");summary.className="survey-candidate-summary";const candidateRows=allRanked.filter(item=>(item.candidateHits||0)>0).length,repeatRows=allRanked.filter(item=>(item.candidateHits||0)>1).length,changingRows=plan.variationMultiplier?allRanked.filter(item=>surveyVariationRatio(item)>=plan.variationMultiplier).length:0,segmentRows=plan.segmentVariationMultiplier?allRanked.filter(item=>surveySegmentVariationRatio(item)>=plan.segmentVariationMultiplier).length:0;summary.textContent=`Showing ${ranked.length} of ${allRanked.length}. ${candidateRows} above-level; ${repeatRows} repeat-hit; ${changingRows} pass-change; ${segmentRows} segment-change. Manual review required.`;panel.appendChild(summary);const head=document.createElement("div");head.className="survey-head";["Rank","Freq","Avg RMS","Hits","Pass","Seg","Channel","Reason","Review"].forEach(value=>{const cell=document.createElement("span");cell.textContent=value;head.appendChild(cell);});panel.appendChild(head);ranked.forEach((item,index)=>{const row=document.createElement("div");row.className="survey-row";const values=[`${index+1}`,`${Number(item.channel.frequency_mhz).toFixed(3)}`,`${item.rms.toFixed(1)}`];values.forEach((value,position)=>{const cell=document.createElement("span");cell.textContent=value;if(position===2&&index<3)cell.className="strong";row.appendChild(cell);});const hits=document.createElement("span");hits.className=`candidate-hit-count ${(item.candidateHits||0)>1?"repeat":""}`;hits.textContent=`${item.candidateHits||0}/${item.measurementCount||plan.passCount}`;row.appendChild(hits);const variation=document.createElement("span");const ratio=surveyVariationRatio(item),changing=plan.variationMultiplier!==null&&ratio>=plan.variationMultiplier;variation.className=changing?"variation-changing":"variation-steady";variation.textContent=`${ratio.toFixed(2)}×`;row.appendChild(variation);const segment=document.createElement("span");const segmentRatio=surveySegmentVariationRatio(item),segmentChanging=plan.segmentVariationMultiplier!==null&&segmentRatio>=plan.segmentVariationMultiplier;segment.className=segmentChanging?"segment-changing":"segment-steady";segment.textContent=`${segmentRatio.toFixed(2)}×`;row.appendChild(segment);const channelCell=document.createElement("span");channelCell.textContent=`${item.channel.frequency_use} · ${item.channel.serviced_facility_name||item.channel.serviced_facility}`;row.appendChild(channelCell);const reason=document.createElement("span");const reasonText=surveyReviewReason(item,plan);reason.className=`review-reasons ${reasonText==="No mark"?"":"marked"}`;reason.textContent=reasonText;row.appendChild(reason);const action=document.createElement("span");const listen=document.createElement("button");listen.type="button";listen.className="survey-review-listen secondary";listen.textContent="Listen";listen.disabled=airbandSurvey.running||airbandCapture.running;listen.onclick=()=>startAirbandLive(item.channel);action.appendChild(listen);const capture=document.createElement("button");capture.type="button";capture.className="survey-review-capture secondary";capture.textContent="Capture 10s";capture.disabled=airbandSurvey.running||airbandCapture.running;capture.onclick=()=>captureAirbandSample(item.channel);action.appendChild(capture);row.appendChild(action);panel.appendChild(row);});}
-function audioBufferRms(buffer){let sum=0,count=0;for(let channel=0;channel<buffer.numberOfChannels;channel++){const values=buffer.getChannelData(channel);for(let index=0;index<values.length;index++){sum+=values[index]*values[index];count+=1;}}return count?Math.sqrt(sum/count)*32768:0;}
-async function stopAirbandSurvey(){airbandSurvey.stopRequested=true;try{await fetch("/api/audio/live/stop",{method:"POST"});}catch(error){void error;}if(airbandSurvey.running)renderSurveyResults("Stopping survey after the current request…");}
-async function runAirbandSurvey(){if(airbandSurvey.running||state.busy||liveAudio.active)return;const plan=readAirbandSurveyPlan();airbandSurvey.plan=plan;airbandSurvey.stopRequested=false;airbandSurvey.results=[];airbandSurvey.passes=[];airbandSurvey.context=airbandSurvey.context||(new (window.AudioContext||window.webkitAudioContext)());await airbandSurvey.context.resume();setAirbandSurveyControls(true);renderSurveyResults(`Loading ${surveyCategoryLabel(plan.category)} channels within ${plan.radiusMiles} miles…`);try{const response=await fetch(`/api/airband/channels?radius_miles=${plan.radiusMiles}&limit=200`,{cache:"no-store"});if(!response.ok)throw new Error("Unable to load FAA channel list.");const data=await response.json();const channels=[];const seen=new Set();for(const channel of data.channels||[]){if(!surveyCategoryMatch(channel,plan.category)||seen.has(channel.frequency_hz))continue;seen.add(channel.frequency_hz);channels.push(channel);if(channels.length>=plan.maxChannels)break;}if(!channels.length)throw new Error("No nearby channels match this survey plan.");const aggregates=new Map(channels.map(channel=>[channel.frequency_hz,{channel:channel,rms:0,rmsTotal:0,measurementCount:0,candidateHits:0,rmsValues:[],segmentVariationRatios:[]}]));for(let pass=0;pass<plan.passCount&&!airbandSurvey.stopRequested;pass++){const observations=[];for(let index=0;index<channels.length&&!airbandSurvey.stopRequested;index++){const channel=channels[index];renderSurveyResults(`Pass ${pass+1} of ${plan.passCount} · channel ${index+1} of ${channels.length}: ${Number(channel.frequency_mhz).toFixed(3)} MHz AM · ${channel.frequency_use}`);const start=await fetch("/api/audio/airband/live/start",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({frequency_hz:channel.frequency_hz,serviced_facility:channel.serviced_facility,frequency_use:channel.frequency_use})});if(!start.ok)throw new Error("Unable to start selected survey channel.");let sequence=0,totalSquare=0,totalSamples=0,segmentRms=[];for(let part=0;part<plan.chunksPerChannel&&!airbandSurvey.stopRequested;part++){const chunk=await fetch(`/api/audio/live/chunk.wav?after=${sequence}`,{cache:"no-store"});if(chunk.status===204){part-=1;continue;}if(!chunk.ok)throw new Error("Unable to receive survey audio segment.");sequence=Number(chunk.headers.get("X-Audio-Sequence")||sequence+1);const decoded=await airbandSurvey.context.decodeAudioData((await chunk.arrayBuffer()).slice(0));const rms=audioBufferRms(decoded);segmentRms.push(rms);const samples=decoded.length*decoded.numberOfChannels;totalSquare+=rms*rms*samples;totalSamples+=samples;}await fetch("/api/audio/live/stop",{method:"POST"});if(totalSamples&&!airbandSurvey.stopRequested)observations.push({channel:channel,rms:Math.sqrt(totalSquare/totalSamples),segmentVariationRatio:segmentRms.length>1?Math.max(...segmentRms)/Math.max(1,Math.min(...segmentRms)):1});}if(observations.length&&!airbandSurvey.stopRequested){const passMedian=surveyMedianRms(observations),threshold=plan.candidateMultiplier?passMedian*plan.candidateMultiplier:null;observations.forEach(observation=>{const aggregate=aggregates.get(observation.channel.frequency_hz);aggregate.rmsTotal+=observation.rms;aggregate.measurementCount+=1;aggregate.rmsValues.push(observation.rms);aggregate.segmentVariationRatios.push(observation.segmentVariationRatio);aggregate.rms=aggregate.rmsTotal/aggregate.measurementCount;if(threshold!==null&&observation.rms>=threshold)aggregate.candidateHits+=1;});airbandSurvey.passes.push({pass:pass+1,median:passMedian,threshold:threshold});airbandSurvey.results=Array.from(aggregates.values()).filter(item=>item.measurementCount>0);}}if(airbandSurvey.results.length){renderSurveyResults();document.getElementById("airband-survey-note").textContent=`Survey complete: ${plan.passCount} pass${plan.passCount===1?"":"es"}, ${surveyCategoryLabel(plan.category)}, ${plan.radiusMiles} mi, ${(plan.chunksPerChannel*.5).toFixed(1)} sec/channel. Hit, pass-variation and segment-change marks rank measured AM levels only and are not confirmed voice traffic. Use Listen, Capture 10s, or Export Survey CSV for manual review.`;}else{renderSurveyResults("Survey stopped without completed measurements.");}}catch(error){renderSurveyResults(error.message);}finally{try{await fetch("/api/audio/live/stop",{method:"POST"});}catch(error){void error;}setAirbandSurveyControls(false);}}
-async function refreshAirbandChannels(){const response=await fetch("/api/airband/channels?radius_miles=100&limit=20",{cache:"no-store"});if(response.ok)renderAirband(await response.json());}
-function renderAudio(a,live){const badge=document.getElementById("audio-state"),progress=document.getElementById("audio-progress"),player=document.getElementById("audio-playback");document.getElementById("audio-role").textContent=(live.audio_role||a.audio_role)?`${(live.audio_role||a.audio_role).serial} / #${(live.audio_role||a.audio_role).index}`:"—";if(liveAudio.active){badge.textContent="Live";const channel=live.channel;progress.textContent=channel?`Listening live: ${Number(channel.frequency_mhz).toFixed(3)} MHz AM · ${channel.frequency_use||channel.category} · ${channel.serviced_facility_name||channel.serviced_facility}`:"Listening live to NOAA audio…";player.classList.remove("ready");return;}if(live.running){badge.textContent="Live";const channel=live.channel;progress.textContent=channel?`Live airband monitor active: ${Number(channel.frequency_mhz).toFixed(3)} MHz AM. Press Stop to control it in this tab.`:"Live NOAA listening is active. Press Stop before starting playback in this tab.";player.classList.remove("ready");return;}badge.textContent=a.running?"Recording":a.recording_ready?"Ready":"Idle";if(a.running){progress.textContent=`Recording NOAA audio… ${a.remaining_seconds??""} seconds remaining`;player.classList.remove("ready");}else if(a.recording_ready){const m=a.metrics||{};progress.textContent=`Latest recording: ${show(m.duration_seconds,"—")} seconds · RMS ${show(m.rms_sample,"—")} · clipping ${show(m.clipped_percent,"—")}%`;if(player.dataset.current!==a.latest_recording_url){player.src=`${a.latest_recording_url}?t=${Date.now()}`;player.dataset.current=a.latest_recording_url;}player.classList.add("ready");}else{progress.textContent="No recording captured this session.";player.classList.remove("ready");}}
-async function refreshAudio(){const [recordingResponse,liveResponse]=await Promise.all([fetch("/api/audio/status",{cache:"no-store"}),fetch("/api/audio/live/status",{cache:"no-store"})]);if(recordingResponse.ok&&liveResponse.ok)renderAudio(await recordingResponse.json(),await liveResponse.json());}
-async function refresh(){try{const s=await fetch("/api/status",{cache:"no-store"}).then(r=>r.json());renderStatus(s);if(s.decoder?.running&&s.decoder?.json_ready){const a=await fetch("/api/aircraft",{cache:"no-store"});if(a.ok)updateAircraft(await a.json());}await refreshAudio();await refreshAirbandChannels();}catch(e){const p=document.getElementById("decoder-pill");p.textContent="Backend offline";p.className="pill stopped";document.getElementById("last-update").textContent=e.message;}}
-async function saveReceiverLocation(){if(state.busy)return;const result=document.getElementById("location-result");const payload={label:document.getElementById("location-label").value,latitude:Number(document.getElementById("location-latitude").value),longitude:Number(document.getElementById("location-longitude").value)};state.busy=true;document.querySelectorAll("button").forEach(b=>b.disabled=true);try{const response=await fetch("/api/settings/receiver-location",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});const data=await response.json();if(!response.ok)throw new Error(data.error||"Unable to save receiver location");state.locationDirty=false;result.textContent=data.decoder_restart_required?"Saved; restart decoder to apply decoder home position.":"Saved.";await refresh();}catch(error){result.textContent=error.message;}finally{state.busy=false;document.querySelectorAll("button").forEach(b=>b.disabled=false);}}
-async function decoder(command){if(state.busy)return;state.busy=true;document.querySelectorAll("button").forEach(b=>b.disabled=true);try{await fetch(`/api/decoder/${command}`,{method:"POST"});await refresh();}finally{state.busy=false;document.querySelectorAll("button").forEach(b=>b.disabled=false);}}
-async function audioCommand(command){if(state.busy)return;state.busy=true;document.querySelectorAll("button").forEach(b=>b.disabled=true);try{await fetch(`/api/audio/${command}`,{method:"POST"});await refreshAudio();}finally{state.busy=false;document.querySelectorAll("button").forEach(b=>b.disabled=false);}}
-function encodeMonoPcmWav(floatSamples,sampleRate){const buffer=new ArrayBuffer(44+floatSamples.length*2),view=new DataView(buffer);const write=(offset,text)=>{for(let i=0;i<text.length;i++)view.setUint8(offset+i,text.charCodeAt(i));};write(0,"RIFF");view.setUint32(4,36+floatSamples.length*2,true);write(8,"WAVE");write(12,"fmt ");view.setUint32(16,16,true);view.setUint16(20,1,true);view.setUint16(22,1,true);view.setUint32(24,sampleRate,true);view.setUint32(28,sampleRate*2,true);view.setUint16(32,2,true);view.setUint16(34,16,true);write(36,"data");view.setUint32(40,floatSamples.length*2,true);for(let i=0;i<floatSamples.length;i++){const value=Math.max(-1,Math.min(1,floatSamples[i]));view.setInt16(44+i*2,value<0?value*32768:value*32767,true);}return new Blob([buffer],{type:"audio/wav"});}
-function airbandCaptureFilename(channel){const frequency=Number(channel.frequency_mhz).toFixed(3).replace(".","_");const facility=(channel.serviced_facility||"FAA").replace(/[^A-Za-z0-9_-]/g,"_");const use=(channel.frequency_use||"AM").replace(/[^A-Za-z0-9_-]/g,"_").slice(0,30);return`airband_${frequency}MHz_${facility}_${use}_10s.wav`;}
-function setAirbandCaptureControls(running){airbandCapture.running=running;document.getElementById("run-airband-survey").disabled=running||airbandSurvey.running;document.querySelectorAll(".airband-listen,.survey-review-listen,.airband-capture,.survey-review-capture").forEach(button=>button.disabled=running||airbandSurvey.running);}
-async function captureAirbandSample(channel){if(airbandCapture.running||airbandSurvey.running||state.busy)return;if(liveAudio.active)await stopLiveAudio();airbandCapture.stopRequested=false;airbandCapture.context=airbandCapture.context||(new (window.AudioContext||window.webkitAudioContext)());await airbandCapture.context.resume();setAirbandCaptureControls(true);const progress=document.getElementById("audio-progress");try{const payload={frequency_hz:channel.frequency_hz,serviced_facility:channel.serviced_facility,frequency_use:channel.frequency_use};const response=await fetch("/api/audio/airband/live/start",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});const result=await response.json();if(!response.ok)throw new Error(result.error||"Unable to start airband capture");let sequence=0;const samples=[];let sampleRate=24000;for(let part=0;part<airbandCapture.chunks&&!airbandCapture.stopRequested;part++){progress.classList.add("capture-active");progress.textContent=`Capturing ${Number(channel.frequency_mhz).toFixed(3)} MHz AM… ${(part*.5).toFixed(1)} / ${airbandCapture.seconds} sec`;const chunk=await fetch(`/api/audio/live/chunk.wav?after=${sequence}`,{cache:"no-store"});if(chunk.status===204){part-=1;continue;}if(!chunk.ok)throw new Error("Unable to receive capture audio segment");sequence=Number(chunk.headers.get("X-Audio-Sequence")||sequence+1);const decoded=await airbandCapture.context.decodeAudioData((await chunk.arrayBuffer()).slice(0));sampleRate=decoded.sampleRate;const values=decoded.getChannelData(0);samples.push(new Float32Array(values));}await fetch("/api/audio/live/stop",{method:"POST"});if(!samples.length)throw new Error("Capture stopped before audio was received");const length=samples.reduce((total,part)=>total+part.length,0),merged=new Float32Array(length);let offset=0;samples.forEach(part=>{merged.set(part,offset);offset+=part.length;});const blob=encodeMonoPcmWav(merged,sampleRate),url=URL.createObjectURL(blob),link=document.createElement("a");link.href=url;link.download=airbandCaptureFilename(channel);link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);progress.textContent=`Captured ${Number(channel.frequency_mhz).toFixed(3)} MHz AM · downloaded ${link.download}`;}catch(error){progress.textContent=error.message;try{await fetch("/api/audio/live/stop",{method:"POST"});}catch(ignore){void ignore;}}finally{progress.classList.remove("capture-active");setAirbandCaptureControls(false);await refreshAudio();}}
-async function startAirbandLive(channel){if(state.busy)return;if(liveAudio.active)await stopLiveAudio();state.busy=true;document.querySelectorAll("button").forEach(b=>b.disabled=true);try{const payload={frequency_hz:channel.frequency_hz,serviced_facility:channel.serviced_facility,frequency_use:channel.frequency_use};const response=await fetch("/api/audio/airband/live/start",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});const result=await response.json();if(!response.ok)throw new Error(result.error||"Unable to start live airband audio");const AudioContextClass=window.AudioContext||window.webkitAudioContext;liveAudio.context=liveAudio.context||new AudioContextClass();await liveAudio.context.resume();liveAudio.active=true;liveAudio.nextSequence=0;liveAudio.nextPlayTime=liveAudio.context.currentTime+.15;liveAudio.generation+=1;pollLiveAudio(liveAudio.generation);await refreshAudio();}catch(error){document.getElementById("audio-progress").textContent=error.message;}finally{state.busy=false;document.querySelectorAll("button").forEach(b=>b.disabled=false);}}
-async function startLiveAudio(){if(liveAudio.active||state.busy)return;state.busy=true;document.querySelectorAll("button").forEach(b=>b.disabled=true);try{const response=await fetch("/api/audio/noaa/live/start",{method:"POST"});if(!response.ok)throw new Error("Unable to start live NOAA audio");const AudioContextClass=window.AudioContext||window.webkitAudioContext;liveAudio.context=liveAudio.context||new AudioContextClass();await liveAudio.context.resume();liveAudio.active=true;liveAudio.nextSequence=0;liveAudio.nextPlayTime=liveAudio.context.currentTime+.15;liveAudio.generation+=1;pollLiveAudio(liveAudio.generation);await refreshAudio();}finally{state.busy=false;document.querySelectorAll("button").forEach(b=>b.disabled=false);}}
-async function pollLiveAudio(generation){while(liveAudio.active&&generation===liveAudio.generation){try{const response=await fetch(`/api/audio/live/chunk.wav?after=${liveAudio.nextSequence}`,{cache:"no-store"});if(response.status===204){await new Promise(resolve=>setTimeout(resolve,100));continue;}if(!response.ok)throw new Error("Live NOAA segment request failed");liveAudio.nextSequence=Number(response.headers.get("X-Audio-Sequence")||liveAudio.nextSequence+1);const bytes=await response.arrayBuffer();const buffer=await liveAudio.context.decodeAudioData(bytes.slice(0));const source=liveAudio.context.createBufferSource();source.buffer=buffer;source.connect(liveAudio.context.destination);const when=Math.max(liveAudio.nextPlayTime,liveAudio.context.currentTime+.04);source.start(when);liveAudio.nextPlayTime=when+buffer.duration;liveAudio.sources.add(source);source.onended=()=>liveAudio.sources.delete(source);}catch(error){document.getElementById("audio-progress").textContent=error.message;await stopLiveAudio();break;}}}
-async function stopLiveAudio(){if(!liveAudio.active){await fetch("/api/audio/live/stop",{method:"POST"});return;}liveAudio.active=false;liveAudio.generation+=1;liveAudio.sources.forEach(source=>{try{source.stop();}catch(error){void error;}});liveAudio.sources.clear();await fetch("/api/audio/live/stop",{method:"POST"});await refreshAudio();}
-async function stopAllAudio(){await stopLiveAudio();await audioCommand("stop");}
-document.addEventListener("DOMContentLoaded",()=>{initMap();document.getElementById("start-decoder").onclick=()=>decoder("start");document.getElementById("stop-decoder").onclick=()=>decoder("stop");document.getElementById("listen-noaa").onclick=()=>startLiveAudio();document.getElementById("record-noaa").onclick=()=>audioCommand("noaa/start");document.getElementById("run-airband-survey").onclick=()=>runAirbandSurvey();document.getElementById("stop-airband-survey").onclick=()=>stopAirbandSurvey();document.getElementById("export-airband-survey").onclick=()=>exportAirbandSurveyCsv();document.getElementById("survey-result-filter").onchange=()=>{if(airbandSurvey.results.length)renderSurveyResults();};document.getElementById("stop-audio").onclick=()=>stopAllAudio();document.getElementById("save-location").onclick=()=>saveReceiverLocation();["location-label","location-latitude","location-longitude"].forEach(id=>document.getElementById(id).addEventListener("input",()=>{state.locationDirty=true;}));refresh();setInterval(refresh,2000);});
+  function rtpV39Path(event){
+    try{if(event&&typeof event.composedPath==="function")return event.composedPath();}catch(_e){}
+    const out=[];
+    let node=event&&event.target;
+    while(node){out.push(node);node=node.parentNode;}
+    try{out.push(window);}catch(_e){}
+    return out;
+  }
+
+  function rtpV39IsElement(node){
+    return !!(node&&node.nodeType===1);
+  }
+
+  function rtpV39IsInAircraftMap(event){
+    const path=rtpV39Path(event);
+    for(const node of path){
+      if(!rtpV39IsElement(node))continue;
+      try{
+        if(node.id==="aircraftMap")return true;
+        if(node.classList&&(
+          node.classList.contains("leaflet-container")||
+          node.classList.contains("leaflet-map-pane")||
+          node.classList.contains("leaflet-marker-pane")||
+          node.classList.contains("leaflet-marker-icon")||
+          node.classList.contains("aircraft-icon-wrap")
+        ))return true;
+      }catch(_e){}
+    }
+    return false;
+  }
+
+  function rtpV39FindMarkerIcon(event){
+    const path=rtpV39Path(event);
+    for(const node of path){
+      if(!rtpV39IsElement(node))continue;
+      try{
+        if(node.classList&&node.classList.contains("leaflet-marker-icon"))return node;
+      }catch(_e){}
+    }
+    for(const node of path){
+      if(!rtpV39IsElement(node))continue;
+      try{
+        if(node.classList&&node.classList.contains("aircraft-icon-wrap"))return node;
+      }catch(_e){}
+    }
+    return null;
+  }
+
+  function rtpV39Stop(event){
+    try{if(event&&typeof L!=="undefined"&&L.DomEvent)L.DomEvent.stop(event);}catch(_e){}
+    try{event.preventDefault();}catch(_e){}
+    try{event.stopPropagation();}catch(_e){}
+    try{event.stopImmediatePropagation();}catch(_e){}
+    return false;
+  }
+
+  function rtpV39DisableLeafletDblZoom(){
+    // Best effort only. The primary protection is stopping the event at window capture.
+    try{
+      const mapEl=document.getElementById("aircraftMap");
+      if(mapEl&&mapEl._leaflet_id&&window.L){
+        // Leaflet does not provide a public map lookup by element. Leave this as no-op.
+      }
+    }catch(_e){}
+  }
+
+  function rtpV39CleanToken(value){
+    const s=String(value||"").trim().toUpperCase();
+    if(!s)return "";
+    const match=s.match(/[A-Z0-9]{3,8}/);
+    return match?match[0]:"";
+  }
+
+  function rtpV39MarkerTokens(markerIcon){
+    const tokens=[];
+    function add(value){
+      const token=rtpV39CleanToken(value);
+      if(token&&!tokens.includes(token))tokens.push(token);
+    }
+    if(markerIcon){
+      try{
+        const d=markerIcon.dataset||{};
+        add(d.aircraftHex||d.hex||d.icao||d.callsign||d.flight);
+      }catch(_e){}
+      try{add(markerIcon.getAttribute("data-aircraft-hex"));}catch(_e){}
+      try{add(markerIcon.getAttribute("data-hex"));}catch(_e){}
+      try{add(markerIcon.getAttribute("title"));}catch(_e){}
+      try{add(markerIcon.getAttribute("aria-label"));}catch(_e){}
+      try{add(markerIcon.textContent);}catch(_e){}
+      try{
+        const wrapped=markerIcon.querySelector&&markerIcon.querySelector(".aircraft-icon-wrap");
+        if(wrapped)add(wrapped.textContent);
+      }catch(_e){}
+    }
+    return tokens;
+  }
+
+  function rtpV39OutsideMap(element){
+    try{
+      const map=document.getElementById("aircraftMap");
+      return !!(element&&(!map||!map.contains(element)));
+    }catch(_e){return true;}
+  }
+
+  function rtpV39CandidateListElements(){
+    const selectors=[
+      "[data-aircraft-hex]",
+      "[data-hex]",
+      "[data-icao]",
+      "[data-flight]",
+      ".aircraft-row",
+      ".aircraft-item",
+      ".aircraft-card",
+      ".aircraft-list-row",
+      "#aircraft-list tr",
+      "#aircraft-table tr",
+      "#aircraft-body tr",
+      "tbody tr",
+      "tr",
+      "li",
+      "[role='button']",
+      "button",
+      "div"
+    ].join(",");
+    try{
+      return Array.from(document.querySelectorAll(selectors)).filter(rtpV39OutsideMap);
+    }catch(_e){return [];}
+  }
+
+  function rtpV39ScoreElement(element,tokens){
+    if(!element||!tokens||!tokens.length)return 0;
+    let score=0;
+    let text="";
+    try{text=String(element.textContent||"").toUpperCase();}catch(_e){}
+    let data="";
+    try{
+      const d=element.dataset||{};
+      data=String(d.aircraftHex||d.hex||d.icao||d.flight||d.callsign||"").toUpperCase();
+    }catch(_e){}
+
+    for(const token of tokens){
+      if(data&&data===token)score=Math.max(score,100);
+      if(data&&data.includes(token))score=Math.max(score,90);
+      if(text){
+        if(text===token)score=Math.max(score,80);
+        else if(text.includes(token))score=Math.max(score,60);
+      }
+    }
+
+    try{
+      const tag=String(element.tagName||"").toUpperCase();
+      const cls=String(element.className||"").toLowerCase();
+      if(tag==="TR")score+=20;
+      if(cls.includes("aircraft"))score+=20;
+      if(element.hasAttribute("data-aircraft-hex")||element.hasAttribute("data-hex")||element.hasAttribute("data-icao"))score+=20;
+      if(text.length>800)score-=20;
+    }catch(_e){}
+
+    return score;
+  }
+
+  function rtpV39FindMatchingListElement(tokens){
+    const candidates=rtpV39CandidateListElements();
+    let best=null;
+    let bestScore=0;
+    for(const el of candidates){
+      const score=rtpV39ScoreElement(el,tokens);
+      if(score>bestScore){
+        best=el;
+        bestScore=score;
+      }
+    }
+    return bestScore>0?best:null;
+  }
+
+  function rtpV39DispatchExistingListClick(element){
+    if(!element)return false;
+    try{element.scrollIntoView({block:"nearest",inline:"nearest"});}catch(_e){}
+    const events=[
+      ["pointerdown",PointerEvent],
+      ["mousedown",MouseEvent],
+      ["mouseup",MouseEvent],
+      ["click",MouseEvent]
+    ];
+    for(const item of events){
+      const type=item[0],Ctor=item[1]||MouseEvent;
+      try{
+        element.dispatchEvent(new Ctor(type,{bubbles:true,cancelable:true,view:window,pointerType:"mouse",button:0,buttons:type.endsWith("down")?1:0}));
+      }catch(_e){
+        try{element.dispatchEvent(new MouseEvent(type,{bubbles:true,cancelable:true,view:window,button:0}));}catch(_e2){}
+      }
+    }
+    try{if(typeof element.click==="function")element.click();}catch(_e){}
+    return true;
+  }
+
+  function rtpV39HandleDblclick(event){
+    if(!rtpV39IsInAircraftMap(event))return;
+    const markerIcon=rtpV39FindMarkerIcon(event);
+    const tokens=rtpV39MarkerTokens(markerIcon);
+
+    // Stop map zoom first, before doing any slower DOM work.
+    rtpV39Stop(event);
+    rtpV39DisableLeafletDblZoom();
+
+    let listElement=null;
+    let clicked=false;
+    if(markerIcon&&tokens.length){
+      listElement=rtpV39FindMatchingListElement(tokens);
+      clicked=rtpV39DispatchExistingListClick(listElement);
+    }
+
+    if(markerIcon&&!clicked){
+      // Fallback: preserve marker popup usability.
+      try{markerIcon.dispatchEvent(new MouseEvent("click",{bubbles:true,cancelable:true,view:window,button:0}));}catch(_e){}
+    }
+
+    try{
+      window.__rtpV39DomAircraftMarkerDblclickStatus={
+        installed:true,
+        handled:true,
+        mapDblclick:true,
+        markerIconFound:!!markerIcon,
+        tokens,
+        listElementFound:!!listElement,
+        listClickDispatched:!!clicked,
+        targetTag:event&&event.target&&event.target.tagName||null,
+        targetClass:String(event&&event.target&&event.target.className||""),
+        lastHandledUtc:new Date().toISOString()
+      };
+    }catch(_e){}
+
+    return false;
+  }
+
+  function rtpV39Install(){
+    if(window.__rtpV39DomAircraftMarkerDblclickBound)return;
+    window.__rtpV39DomAircraftMarkerDblclickBound=true;
+    window.addEventListener("dblclick",rtpV39HandleDblclick,true);
+  }
+
+  try{rtpV39Install();}catch(_e){}
+  try{document.addEventListener("DOMContentLoaded",rtpV39Install);}catch(_e){}
+})();
+
+
+
+// V8 temporary double-click event logger.
+// Logs browser dblclick event routing to backend /api/debug/ui-event.
+
+
+
+
+// V7 aircraft marker double-click bridge.
+// Reuses the existing aircraft-list click behavior that already opens the
+// aircraft details dialog. Single-click marker behavior is left alone.
+
+
+
+
+// V6 safe aircraft marker double-click hook.
+// This intentionally does not disable normal Leaflet click handling and does
+// not install click/mousedown handlers, so normal single-click marker popups
+// continue to work.
+
+
+
+
+// V5 aircraft marker double-click hook.
+// This operates at the Leaflet marker layer so it does not depend on the name
+// of the aircraft render/update function in this UI build.
+
+
+
+// Extracted from web/index.html by refactor_inline_ui_assets.py
+
+'use strict';
+
+let audioObjectUrl = null;
+let liveListening = false;
+let liveAudioContext = null;
+let noaaAudioPreparedForStart = false; /* Step 60: NOAA prepares browser audio before selection and owns receiver */
+let noaaAudioUsesAirbandContext = false; /* Step 65: NOAA browser playback context and reconnect support */
+let noaaPlaybackChunksScheduled = 0;
+let noaaPlaybackLastChunkRms = null; /* Step 72: dedicated NOAA browser AudioContext after Airband handoff */
+let noaaHtmlAudioElement = null; /* Step 75: NOAA HTML audio element queue replaces silent Web Audio scheduling */
+let noaaHtmlAudioQueue = [];
+let noaaHtmlAudioCurrentUrl = null;
+let noaaHtmlAudioPrimerUrl = null;
+let noaaHtmlAudioFetchBusy = false;
+let noaaHtmlAudioRealPlaybackStarted = false;
+let noaaHtmlAudioGeneration = 0;
+let liveNextCursor = 0;
+let liveNextPlayTime = 0;
+let livePumpTimer = null;
+let airbandAudioContext = null;
+let airbandAudioAuthorized = false;
+let airbandAudioCursor = 0;
+let airbandNextPlayTime = 0;
+let airbandPumpTimer = null;
+let airbandPlayingHoldId = null;
+let airbandTestPlayedEventId = 0;
+let aircraftMap = null;
+let receiverMapMarker = null;
+let receiverRangeRings = null;
+let receiverMapLocation = null;
+let aircraftMapMarkers = new Map();
+let aircraftLastPositions = new Map();
+let aircraftTrailSegments = new Map();
+let aircraftMapFirstFit = true;
+let receiverLocationPickActive = false;
+let receiverLocationPreview = null;
+const TRAIL_STORAGE_KEY = 'rtlPiAdsbTrailHistoryV1';
+const TRAIL_RETENTION_KEY = 'rtlPiAdsbTrailRetentionMinutes';
+const TRAIL_DISPLAY_MODE_KEY = 'rtlAdsbTrailDisplayModeV1';
+const TRAIL_CLEARED_AT_KEY = 'rtlPiAdsbTrailClearedAtV1';
+let aircraftTrailHistory = new Map();
+let aircraftTrailRetentionMinutes = 240;
+let aircraftTrailDisplayMode = localStorage.getItem(TRAIL_DISPLAY_MODE_KEY) || 'active';
+if (aircraftTrailDisplayMode !== 'active' && aircraftTrailDisplayMode !== 'history') aircraftTrailDisplayMode = 'active';
+let aircraftTrailClearedAt = Number(localStorage.getItem(TRAIL_CLEARED_AT_KEY) || '0');
+
+function el(id) { return document.getElementById(id); }
+function setText(id, value) { const node = el(id); if (node) node.textContent = value; }
+function formattedNumber(value) { return typeof value === 'number' ? value.toLocaleString() : '—'; }
+function setMessage(id, message, kind) {
+  const node = el(id);
+  if (!node) return;
+  node.textContent = message;
+  node.className = 'message ' + (kind || '');
+}
+async function jsonRequest(url, options) {
+  const response = await fetch(url, Object.assign({cache: 'no-store'}, options || {}));
+  let result = null;
+  try { result = await response.json(); } catch (_) {}
+  if (!response.ok) {
+    throw new Error((result && result.error) ? result.error : `Request failed: HTTP ${response.status}`);
+  }
+  return result;
+}
+
+/* Step 70: validate operation status API objects before property access */
+function requireObjectResponse(value, label) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+  throw new Error(`${label} returned no status data; the service may be restarting`);
+}
+
+function altitudeFeet(aircraft) {
+  const value = aircraft.alt_baro != null ? aircraft.alt_baro : (aircraft.altitude != null ? aircraft.altitude : aircraft.alt_geom);
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+function trailColor(altitude) {
+  if (altitude == null) return '#a0aab8';
+  if (altitude < 5001) return '#39ff14';
+  if (altitude < 10001) return '#087830';
+  if (altitude < 20001) return '#39cfff';
+  if (altitude < 30001) return '#1851b5';
+  if (altitude < 40001) return '#d4a600';
+  return '#ff3030';
+}
+function escapeHtml(value) {
+  return String(value == null ? '' : value)
+    .replaceAll('&', '&amp;').replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;').replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+function initializeAircraftMap() {
+  if (typeof L === 'undefined') {
+    setMessage('mapMessage', 'Map library could not load. The browser workstation must have internet access for Leaflet and map tiles.', 'error');
+    return;
+  }
+  aircraftMap = L.map('aircraftMap').setView([29.7604, -95.3698], 9);
+  
+  aircraftMap.on('click', finishReceiverLocationPick);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+  }).addTo(aircraftMap);
+}
+function setReceiverPreviewOnMap(latitude, longitude) {
+  if (!aircraftMap) return;
+  const position = [Number(latitude), Number(longitude)];
+  receiverLocationPreview = position;
+  if (!receiverMapMarker) {
+    receiverMapMarker = L.circleMarker(position, {
+      radius: 8, color: '#f2c35c', weight: 3, fillColor: '#2778d4', fillOpacity: 0.95
+    }).addTo(aircraftMap).bindPopup('');
+  } else {
+    receiverMapMarker.setLatLng(position);
+    if (receiverMapMarker.setStyle) receiverMapMarker.setStyle({color: '#f2c35c', weight: 3});
+  }
+  receiverMapMarker.setPopupContent(
+    `<strong>Receiver Location Preview</strong><br>${position[0].toFixed(6)}, ${position[1].toFixed(6)}<br>Click Save Receiver Location to confirm.`
+  );
+  receiverMapMarker.openPopup();
+  drawReceiverRangeRings(position);
+}
+function beginReceiverLocationPick() {
+  if (!aircraftMap) {
+    setMessage('locationMessage', 'Map is not available for location selection.', 'error');
+    return;
+  }
+  receiverLocationPickActive = true;
+  el('pickLocationOnMap').disabled = true;
+  el('cancelLocationPick').disabled = false;
+  el('aircraftMap').classList.add('map-location-pick-active');
+  if (typeof closeMenu === 'function') closeMenu();
+  setMessage(
+    'mapMessage',
+    'Location selection active: click the map at the physical antenna location.',
+    'warning'
+  );
+}
+function finishReceiverLocationPick(event) {
+  if (!receiverLocationPickActive) return;
+  const latitude = Number(event.latlng.lat);
+  const longitude = Number(event.latlng.lng);
+
+  el('locationLatitude').value = latitude.toFixed(6);
+  el('locationLongitude').value = longitude.toFixed(6);
+  if (el('locationName')) el('locationName').dataset.edited = 'true';
+  setReceiverPreviewOnMap(latitude, longitude);
+
+  receiverLocationPickActive = false;
+  el('pickLocationOnMap').disabled = false;
+  el('cancelLocationPick').disabled = true;
+  el('aircraftMap').classList.remove('map-location-pick-active');
+
+  if (typeof openMenu === 'function') openMenu();
+  const pickerButton = el('pickLocationOnMap');
+  const settings = el('configurationDetails') || (pickerButton ? pickerButton.closest('details') : null);
+  if (settings) settings.open = true;
+
+  setMessage(
+    'locationMessage',
+    `Map selection preview: ${latitude.toFixed(6)}, ${longitude.toFixed(6)}. Click Save Receiver Location to confirm.`,
+    'warning'
+  );
+  setMessage('mapMessage', 'Receiver location preview selected. Save it from Configuration to apply.', 'warning');
+}
+function cancelReceiverLocationPick() {
+  receiverLocationPickActive = false;
+  el('pickLocationOnMap').disabled = false;
+  el('cancelLocationPick').disabled = true;
+  el('aircraftMap').classList.remove('map-location-pick-active');
+  setMessage('locationMessage', 'Map location selection cancelled. Saved receiver location is unchanged.', '');
+  setMessage('mapMessage', 'Map location selection cancelled.', '');
+}
+
+function drawReceiverRangeRings(position) {
+  if (!aircraftMap || !position) return;
+  if (receiverRangeRings) aircraftMap.removeLayer(receiverRangeRings);
+  receiverRangeRings = L.layerGroup().addTo(aircraftMap);
+
+  const milesToMeters = 1609.344;
+  const center = [Number(position[0]), Number(position[1])];
+
+  for (let miles = 5; miles <= 100; miles += 5) {
+    const major = miles % 25 === 0;
+    L.circle(center, {
+      radius: miles * milesToMeters,
+      color: major ? '#3e4650' : '#1d232a',
+      weight: major ? 2.0 : 0.75,
+      opacity: major ? 0.82 : 0.62,
+      fill: false,
+      interactive: false,
+      dashArray: major ? null : '3 5'
+    }).addTo(receiverRangeRings);
+
+    if (major) {
+      const labelPoint = L.latLng(center[0] + (miles / 69.0), center[1]);
+      L.marker(labelPoint, {
+        interactive: false,
+        keyboard: false,
+        icon: L.divIcon({
+          className: '',
+          html: `<div class="range-ring-major-label">${miles} mi</div>`,
+          iconSize: [45, 18],
+          iconAnchor: [22, 9]
+        })
+      }).addTo(receiverRangeRings);
+    }
+  }
+}
+
+function setReceiverOnMap(location) {
+  if (!aircraftMap || !location) return;
+  const position = [Number(location.latitude), Number(location.longitude)];
+  receiverMapLocation = position;
+  if (!receiverMapMarker) {
+    receiverMapMarker = L.circleMarker(position, {
+      radius: 8, color: '#ffffff', weight: 2, fillColor: '#2778d4', fillOpacity: 0.95
+    }).addTo(aircraftMap).bindPopup('');
+  } else {
+    receiverMapMarker.setLatLng(position);
+  }
+  receiverMapMarker.setPopupContent(`<strong>Receiver</strong><br>${escapeHtml(location.name || '')}<br>${position[0].toFixed(5)}, ${position[1].toFixed(5)}`);
+  if (aircraftMapFirstFit) aircraftMap.setView(position, 10);
+  if (receiverMapMarker && receiverMapMarker.setStyle) {
+    receiverMapMarker.setStyle({color: '#ffffff', weight: 2});
+  }
+  receiverLocationPreview = null;
+  drawReceiverRangeRings(position);
+}
+function aircraftMapIcon(aircraft) {
+  const color = '#5f6670';
+  const track = Number.isFinite(Number(aircraft.track)) ? Number(aircraft.track) : 0;
+  const flight = aircraft.flight ? String(aircraft.flight).trim() : '';
+  const label = flight || String(aircraft.hex || '').toUpperCase();
+  const html = `<div class="aircraft-icon-wrap">` +
+    `<svg width="28" height="28" viewBox="0 0 40 40" style="transform:rotate(${track}deg)" aria-hidden="true">` +
+    `<path d="M20 2 L23 15 L36 20 L36 23 L23 21 L22 34 L27 37 L27 39 L20 37 L13 39 L13 37 L18 34 L17 21 L4 23 L4 20 L17 15 Z"` +
+    ` fill="${color}" stroke="#ffffff" stroke-width="1.25" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>` +
+    `</svg>` +
+    `<span class="aircraft-icon-label">${escapeHtml(label)}</span>` +
+    `</div>`;
+  return L.divIcon({
+    className: '',
+    html: html,
+    iconSize: [33, 31],
+    iconAnchor: [14, 14],
+    popupAnchor: [0, -14]
+  });
+}
+
+function aircraftPopup(aircraft) {
+  const flight = aircraft.flight ? String(aircraft.flight).trim() : '';
+  const altitude = altitudeFeet(aircraft);
+  const speed = aircraft.gs == null ? '—' : `${aircraft.gs} kt`;
+  const track = aircraft.track == null ? '—' : `${aircraft.track}°`;
+  return `<strong>${escapeHtml(flight || aircraft.hex || 'Unknown')}</strong><br>` +
+    `ICAO: ${escapeHtml(aircraft.hex || '')}<br>` +
+    `Altitude: ${altitude == null ? '—' : altitude.toLocaleString() + ' ft'}<br>` +
+    `Speed: ${escapeHtml(speed)} &nbsp; Track: ${escapeHtml(track)}`;
+}
+function trailCutoffTime() {
+  const retentionCutoff = aircraftTrailRetentionMinutes > 0
+    ? Date.now() - aircraftTrailRetentionMinutes * 60000
+    : 0;
+  return Math.max(retentionCutoff, aircraftTrailClearedAt);
+}
+function pruneTrailHistory() {
+  const cutoff = trailCutoffTime();
+  let allPoints = [];
+  for (const [key, points] of aircraftTrailHistory.entries()) {
+    const retained = points.filter(point => !cutoff || point.time >= cutoff).slice(-1440);
+    if (retained.length) {
+      aircraftTrailHistory.set(key, retained);
+      allPoints.push(...retained.map(point => ({key: key, point: point})));
+    } else {
+      aircraftTrailHistory.delete(key);
+    }
+  }
+  if (allPoints.length > 12000) {
+    allPoints.sort((a, b) => a.point.time - b.point.time);
+    const removeCount = allPoints.length - 12000;
+    for (const entry of allPoints.slice(0, removeCount)) {
+      const points = aircraftTrailHistory.get(entry.key) || [];
+      const index = points.indexOf(entry.point);
+      if (index >= 0) points.splice(index, 1);
+      if (!points.length) aircraftTrailHistory.delete(entry.key);
+    }
+  }
+}
+function saveTrailHistory() {
+  try {
+    pruneTrailHistory();
+    const serializable = Object.fromEntries(aircraftTrailHistory.entries());
+    if (aircraftTrailHistory.size) {
+      localStorage.setItem(TRAIL_STORAGE_KEY, JSON.stringify(serializable));
+    } else {
+      localStorage.removeItem(TRAIL_STORAGE_KEY);
+    }
+    localStorage.setItem(TRAIL_RETENTION_KEY, String(aircraftTrailRetentionMinutes));
+    localStorage.setItem(TRAIL_DISPLAY_MODE_KEY, aircraftTrailDisplayMode);
+  } catch (_) {
+    setMessage('mapMessage', 'Map is live, but browser storage could not save aircraft trails.', 'warning');
+  }
+}
+function loadTrailHistory() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(TRAIL_STORAGE_KEY) || '{}');
+    aircraftTrailHistory = new Map(Object.entries(saved).filter(([, points]) => Array.isArray(points)));
+    pruneTrailHistory();
+  } catch (_) {
+    aircraftTrailHistory = new Map();
+    localStorage.removeItem(TRAIL_STORAGE_KEY);
+  }
+}
+function removeTrailLayersForAircraft(key) {
+  if (!aircraftMap) return;
+  const segments = aircraftTrailSegments.get(key) || [];
+  for (const segment of segments) aircraftMap.removeLayer(segment);
+  aircraftTrailSegments.delete(key);
+}
+function removeTrailLayers() {
+  if (!aircraftMap) return;
+  for (const key of Array.from(aircraftTrailSegments.keys())) removeTrailLayersForAircraft(key);
+}
+function formatTrailLastSeen(timestamp) {
+  const milliseconds = Number(timestamp);
+  if (!Number.isFinite(milliseconds) || milliseconds <= 0) return 'Unknown';
+  return new Intl.DateTimeFormat([], {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+    timeZoneName: 'short'
+  }).format(new Date(milliseconds));
+}
+
+const trailRouteHoverCache = new Map();
+
+async function updateTrailTooltipRoute(segment, tooltipHeader, flight) {
+  const callsign = String(flight || '').trim().toUpperCase();
+  if (!callsign) return;
+
+  segment.setTooltipContent(`${tooltipHeader}<br>From / To: Looking up…`);
+
+  let routePromise = trailRouteHoverCache.get(callsign);
+  if (!routePromise) {
+    routePromise = requestAirlabsDiagnosticRoute(callsign);
+    trailRouteHoverCache.set(callsign, routePromise);
+  }
+
+  try {
+    const result = await routePromise;
+    if (!result.matched) {
+      trailRouteHoverCache.delete(callsign);
+      segment.setTooltipContent(
+        `${tooltipHeader}<br>From / To: Unavailable`
+      );
+      return;
+    }
+
+    const origin = escapeHtml(formatAirlabsAirport(result.departure_iata, result.departure_icao));
+    const destination = escapeHtml(formatAirlabsAirport(result.arrival_iata, result.arrival_icao));
+    const source = result.cache_hit ? 'AirLabs (cached)' : 'AirLabs';
+    segment.setTooltipContent(
+      `${tooltipHeader}<br>From: ${origin}<br>To: ${destination}<br>Source: ${source}`
+    );
+  } catch (error) {
+    trailRouteHoverCache.delete(callsign);
+    segment.setTooltipContent(`${tooltipHeader}<br>From / To: Lookup unavailable`);
+  }
+}
+
+function addTrailSegment(key, prior, current) {
+  const segment = L.polyline(
+    [[prior.lat, prior.lon], [current.lat, current.lon]],
+    {color: trailColor(current.altitude), weight: 3, opacity: 0.86}
+  ).addTo(aircraftMap);
+
+  const flight = String(current.flight || prior.flight || '').trim();
+  const identifier = flight || String(current.hex || prior.hex || key || '').toUpperCase();
+  const identifierLabel = flight ? 'Flight' : 'Aircraft';
+  const lastSeen = formatTrailLastSeen(current.time || prior.time);
+  if (identifier) {
+    const tooltipHeader =
+      `<strong>${identifierLabel}: ${escapeHtml(identifier)}</strong><br>` +
+      `Last Seen: ${escapeHtml(lastSeen)}`;
+    const tooltipHtml = tooltipHeader +
+      (flight ? '<br>From / To: Hover to look up' : '<br>From / To: Unavailable without callsign');
+    segment.bindTooltip(tooltipHtml, {
+      sticky: true,
+      direction: 'top',
+      opacity: 0.94,
+      className: 'trail-hover-label'
+    });
+    if (flight) {
+      segment.on('tooltipopen', () => updateTrailTooltipRoute(segment, tooltipHeader, flight));
+    }
+  }
+
+  const segments = aircraftTrailSegments.get(key) || [];
+  segments.push(segment);
+  while (segments.length > 1440) aircraftMap.removeLayer(segments.shift());
+  aircraftTrailSegments.set(key, segments);
+}
+function renderStoredTrails(activeKeys = null) {
+  if (!aircraftMap) return;
+  removeTrailLayers();
+  aircraftLastPositions.clear();
+  pruneTrailHistory();
+  if (aircraftTrailDisplayMode === 'active' && !activeKeys) return;
+  const allowedKeys = activeKeys ? new Set(Array.from(activeKeys, key => String(key))) : null;
+  for (const [key, points] of aircraftTrailHistory.entries()) {
+    if (allowedKeys && !allowedKeys.has(String(key))) continue;
+    for (let index = 1; index < points.length; index += 1) {
+      addTrailSegment(key, points[index - 1], points[index]);
+    }
+    if (points.length) {
+      const last = points[points.length - 1];
+      aircraftLastPositions.set(key, [last.lat, last.lon]);
+    }
+  }
+}
+function recordTrailPoint(key, point, altitude, aircraft) {
+  const points = aircraftTrailHistory.get(key) || [];
+  const previous = points.length ? points[points.length - 1] : null;
+  if (previous && previous.lat === point[0] && previous.lon === point[1]) return;
+  const current = {
+    lat: point[0],
+    lon: point[1],
+    altitude: altitude,
+    time: Date.now(),
+    flight: aircraft && aircraft.flight ? String(aircraft.flight).trim() : '',
+    hex: aircraft && aircraft.hex ? String(aircraft.hex).toUpperCase() : String(key).toUpperCase(),
+    track: aircraft ? aircraft.track : null
+  };
+  if (previous && (aircraftTrailDisplayMode !== 'active' || aircraftMapMarkers.has(key))) addTrailSegment(key, previous, current);
+  points.push(current);
+  aircraftTrailHistory.set(key, points);
+  aircraftLastPositions.set(key, point);
+  saveTrailHistory();
+}
+async function loadTrailHistoryFromServer(restoreCleared = false) {
+  try {
+    const response = await fetch('/api/trails/history', {cache: 'no-store'});
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    const serverTrails = data.trails || {};
+    const serverPointCount = Object.values(serverTrails)
+      .reduce((total, points) => total + (Array.isArray(points) ? points.length : 0), 0);
+
+    if (restoreCleared && serverPointCount > 0) {
+      aircraftTrailClearedAt = 0;
+      localStorage.removeItem(TRAIL_CLEARED_AT_KEY);
+    }
+
+    let restoredPointCount = 0;
+    let hiddenByClearCount = 0;
+    const beforeCount = Array.from(aircraftTrailHistory.values())
+      .reduce((total, points) => total + points.length, 0);
+
+    for (const [key, points] of Object.entries(serverTrails)) {
+      if (!Array.isArray(points)) continue;
+      const eligible = points.filter(point => {
+        const allowed = restoreCleared || Number(point.time) >= aircraftTrailClearedAt;
+        if (!allowed) hiddenByClearCount += 1;
+        return allowed;
+      });
+      const existing = aircraftTrailHistory.get(key) || [];
+      const merged = [...existing, ...eligible]
+        .sort((left, right) => Number(left.time) - Number(right.time));
+      const unique = [];
+      const seen = new Set();
+      for (const point of merged) {
+        const signature = `${point.time}|${point.lat}|${point.lon}`;
+        if (!seen.has(signature)) {
+          seen.add(signature);
+          unique.push(point);
+        }
+      }
+      if (unique.length) {
+        aircraftTrailHistory.set(key, unique);
+      }
+    }
+
+    if (restoreCleared) {
+      aircraftTrailDisplayMode = 'history';
+      aircraftTrailRetentionMinutes = 240;
+      if (el('trailRetention')) el('trailRetention').value = '240';
+    }
+    saveTrailHistory();
+    renderStoredTrails(restoreCleared ? null : new Set(aircraftMapMarkers.keys()));
+
+    const afterCount = Array.from(aircraftTrailHistory.values())
+      .reduce((total, points) => total + points.length, 0);
+    restoredPointCount = Math.max(0, afterCount - beforeCount);
+
+    if (!serverPointCount) {
+      setMessage('mapMessage', 'No saved positioned aircraft trail history yet.', '');
+    } else if (restoreCleared) {
+      setMessage('mapMessage',
+        `Restored history: ${serverPointCount} stored points across ${Object.keys(serverTrails).length} aircraft; ${restoredPointCount} points were newly added to this map.`,
+        'good');
+    } else if (hiddenByClearCount) {
+      setMessage('mapMessage',
+        `History has ${serverPointCount} stored points, but ${hiddenByClearCount} pre-clear points remain hidden. Click Restore History to display them again.`,
+        'warning');
+    } else {
+      setMessage('mapMessage',
+        `Loaded history: ${serverPointCount} stored points across ${Object.keys(serverTrails).length} aircraft; ${restoredPointCount} points were newly added.`,
+        'good');
+    }
+  } catch (error) {
+    setMessage('mapMessage', `Trail history unavailable: ${error.message}`, 'error');
+  }
+}
+
+function changeTrailRetention() {
+  const value = el('trailRetention').value;
+  if (value === 'active') {
+    aircraftTrailDisplayMode = 'active';
+    aircraftTrailRetentionMinutes = 240;
+    saveTrailHistory();
+    renderStoredTrails(new Set(aircraftMapMarkers.keys()));
+    setMessage('mapMessage', 'Trails show only while aircraft are visible or active. History is retained for up to 4 hours and can be restored.', 'good');
+    return;
+  }
+  aircraftTrailDisplayMode = 'history';
+  aircraftTrailRetentionMinutes = Math.min(240, Math.max(15, Number(value) || 240));
+  saveTrailHistory();
+  renderStoredTrails();
+  setMessage('mapMessage', `Showing stored trails from the last ${aircraftTrailRetentionMinutes} minutes.`, 'good');
+}
+
+function updateAircraftMap(aircraftRecords) {
+  if (!aircraftMap) return;
+  const positioned = aircraftRecords.filter(item => Number.isFinite(Number(item.lat)) && Number.isFinite(Number(item.lon)));
+  const visibleIds = new Set();
+
+  for (const aircraft of positioned) {
+    const key = String(aircraft.hex || aircraft.flight || `${aircraft.lat},${aircraft.lon}`);
+    const point = [Number(aircraft.lat), Number(aircraft.lon)];
+    visibleIds.add(key);
+    const altitude = altitudeFeet(aircraft);
+    const color = trailColor(altitude);
+    recordTrailPoint(key, point, altitude, aircraft);
+
+    let marker = aircraftMapMarkers.get(key);
+    if (!marker) {
+      marker = L.marker(point, {
+        icon: aircraftMapIcon(aircraft),
+        keyboard: false,
+        riseOnHover: true
+      }).addTo(aircraftMap);
+      aircraftMapMarkers.set(key, marker);
+    } else {
+      marker.setLatLng(point);
+      marker.setIcon(aircraftMapIcon(aircraft));
+    }
+    marker.bindPopup(aircraftPopup(aircraft));
+  }
+
+  for (const [key, marker] of aircraftMapMarkers.entries()) {
+    if (!visibleIds.has(key)) {
+      aircraftMap.removeLayer(marker);
+      aircraftMapMarkers.delete(key);
+      aircraftLastPositions.delete(key);
+      if (aircraftTrailDisplayMode === 'active') removeTrailLayersForAircraft(key);
+    }
+  }
+
+  setMessage('mapMessage',
+    positioned.length ? `Displaying ${positioned.length} aircraft with positions. Click an aircraft for details.` : 'No positioned aircraft currently reported by readsb.',
+    positioned.length ? 'good' : '');
+
+  if (aircraftMapFirstFit && positioned.length) {
+    const points = positioned.map(item => [Number(item.lat), Number(item.lon)]);
+    if (receiverMapLocation) points.push(receiverMapLocation);
+    aircraftMap.fitBounds(points, {padding: [30, 30], maxZoom: 11});
+    aircraftMapFirstFit = false;
+  }
+}
+function fitAircraftMap() {
+  if (!aircraftMap) return;
+  const points = Array.from(aircraftMapMarkers.values()).map(marker => marker.getLatLng());
+  if (receiverMapLocation) points.push(L.latLng(receiverMapLocation[0], receiverMapLocation[1]));
+  if (points.length) aircraftMap.fitBounds(points, {padding: [30, 30], maxZoom: 12});
+}
+function centerReceiverMap() {
+  if (aircraftMap && receiverMapLocation) aircraftMap.setView(receiverMapLocation, 10);
+}
+function clearAircraftTrails() {
+  if (!aircraftMap) return;
+
+  removeTrailLayers();
+  aircraftLastPositions.clear();
+  aircraftTrailHistory.clear();
+
+  aircraftTrailClearedAt = Date.now();
+  localStorage.setItem(TRAIL_CLEARED_AT_KEY, String(aircraftTrailClearedAt));
+  localStorage.removeItem(TRAIL_STORAGE_KEY);
+
+  setMessage(
+    'mapMessage',
+    'Display cleared. Trail history is still stored for up to 4 hours; click Restore History to show it again.',
+    'good'
+  );
+}
+
+async function eraseTrailHistory() {
+  const confirmed = window.confirm(
+    'Erase all stored aircraft trail history collected so far? This cannot be restored.'
+  );
+  if (!confirmed) return;
+
+  removeTrailLayers();
+  aircraftLastPositions.clear();
+  aircraftTrailHistory.clear();
+  aircraftTrailClearedAt = Date.now();
+  localStorage.setItem(TRAIL_CLEARED_AT_KEY, String(aircraftTrailClearedAt));
+  localStorage.removeItem(TRAIL_STORAGE_KEY);
+
+  setMessage('mapMessage', 'Erasing browser and stored aircraft trails...', 'warning');
+  try {
+    const response = await fetch('/api/trails/clear', {method: 'POST', cache: 'no-store'});
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    aircraftTrailClearedAt = Number(result.cleared_utc_ms || aircraftTrailClearedAt);
+    localStorage.setItem(TRAIL_CLEARED_AT_KEY, String(aircraftTrailClearedAt));
+    setMessage(
+      'mapMessage',
+      'Stored history erased. Only new post-erase movement will be retained.',
+      'good'
+    );
+  } catch (error) {
+    setMessage(
+      'mapMessage',
+      `Display cleared, but stored history erase failed: ${error.message}`,
+      'error'
+    );
+  }
+}
+
+function updateAudioButtons(status) {
+  const live = Boolean(status && status.live_audio_running);
+  const busy = Boolean(status && status.audio_busy);
+  el('startLive').disabled = busy || live;
+  el('stopLive').disabled = !live;
+  el('capture10').disabled = busy || live;
+  el('autoNoaa').disabled = busy || live;
+  const state = el('audioState');
+  state.textContent = live ? 'Live' : (busy ? 'Busy' : 'Ready');
+  state.className = 'value ' + ((busy || live) ? 'busy' : 'ready');
+}
+
+function renderLocation(location) {
+  if (!location) {
+    setMessage('locationMessage', 'No receiver location configured. Enter the antenna location and save it.', 'warning');
+    return;
+  }
+  el('locationName').value = location.name || '';
+  el('locationLatitude').value = location.latitude;
+  el('locationLongitude').value = location.longitude;
+  el('locationRadius').value = location.airband_radius_miles;
+  setMessage('locationMessage',
+    `Saved: ${location.name} (${Number(location.latitude).toFixed(6)}, ${Number(location.longitude).toFixed(6)}) · ${location.airband_radius_miles} mile radius.`,
+    'good');
+  if (el('airbandRadiusMessage')) {
+    setMessage('airbandRadiusMessage', `Current Airband scan radius: ${Number(location.airband_radius_miles).toFixed(1)} miles.`, 'good');
+  }
+  setReceiverOnMap(location);
+}
+
+async function updateStatus() {
+  try {
+    const status = requireObjectResponse(await jsonRequest('/api/status'), 'Receiver status');
+    setText('stationName', status.noaa_station || 'NOAA Weather');
+    setText('stationDetail',
+      `NOAA: ${(Number(status.noaa_frequency_hz) / 1000000).toFixed(3)} MHz NFM · Audio RTL-SDR S/N: ${status.audio_receiver_serial || '—'}`);
+    setText('messageCount', formattedNumber(status.messages));
+    setText('aircraftCount', formattedNumber(status.aircraft_count));
+    setText('positionCount', formattedNumber(status.aircraft_with_position));
+    updateAudioButtons(status);
+    if (!el('locationName').dataset.edited) renderLocation(status.receiver_location);
+  } catch (error) {
+    setMessage('audioMessage', `Status failed: ${error.message}`, 'error');
+  }
+}
+
+function detailValue(id, value) {
+  el(id).textContent = value == null || String(value).trim() === '' ? '—' : String(value);
+}
+function formatAirport(airport) {
+  if (!airport) return 'Unavailable';
+  const code = airport.iata_code || airport.icao_code || '';
+  const name = airport.name || airport.municipality || '';
+  const place = airport.municipality && airport.name ? ` — ${airport.municipality}` : '';
+  return `${name}${code ? ` (${code})` : ''}${place}` || 'Unavailable';
+}
+function closeAircraftDetails() {
+  el('aircraftDetailOverlay').classList.remove('open');
+}
+function createDetailLink(text, url) {
+  const link = document.createElement('a');
+  link.textContent = text;
+  link.href = url;
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  return link;
+}
+function updateTailNumberActions(registration) {
+  const actions = el('aircraftLookupActions');
+  actions.replaceChildren();
+  const tail = String(registration || '').trim().toUpperCase();
+  if (!tail) return;
+
+  actions.appendChild(createDetailLink(
+    `ADSBDB Tail Lookup: ${tail}`,
+    `https://api.adsbdb.com/v0/aircraft/${encodeURIComponent(tail)}`
+  ));
+
+  if (/^N[0-9A-Z]{1,5}$/.test(tail)) {
+    actions.appendChild(createDetailLink(
+      'FAA N-Number Inquiry',
+      'https://registry.faa.gov/aircraftinquiry/search/nnumberinquiry'
+    ));
+    const copy = document.createElement('button');
+    copy.type = 'button';
+    copy.textContent = `Copy ${tail} for FAA Search`;
+    copy.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(tail);
+        setMessage('aircraftDetailStatus', `${tail} copied. Paste it into the FAA N-Number Inquiry form.`, 'good');
+      } catch (_) {
+        setMessage('aircraftDetailStatus', `FAA search tail number: ${tail}`, 'warning');
+      }
+    });
+    actions.appendChild(copy);
+  }
+}
+function likelyTailNumber(value) {
+  const text = String(value || '').trim().toUpperCase().replace(/\s+/g, '');
+  return /^N[0-9A-Z]{1,5}$/.test(text) ||
+    /^[A-Z]{1,2}-[A-Z0-9]{2,6}$/.test(text) ||
+    /^[A-Z]{2,5}[0-9]{1,5}$/.test(text);
+}
+function setAircraftPhotoCandidates(urls, description, options = {}) {
+  const image = el('aircraftPhoto');
+  const message = el('aircraftPhotoMessage');
+  const actions = el('aircraftPhotoActions');
+  const attribution = el('aircraftPhotoAttribution');
+  const candidates = Array.from(new Set((Array.isArray(urls) ? urls : [])
+    .map(value => String(value || '').trim())
+    .filter(value => /^https?:\/\//i.test(value))));
+  const fallback = typeof options.fallback === 'function' ? options.fallback : null;
+  const sourceUrl = String(options.sourceUrl || '').trim();
+  const sourceLinkLabel = options.sourceLinkLabel || 'Open Photograph Source';
+  const defaultCaption = 'Exact-aircraft photos use ADSBDB when available; generic type fallback photos are labeled and sourced from Wikimedia Commons.';
+
+  actions.replaceChildren();
+  image.style.display = 'none';
+  image.removeAttribute('src');
+  image.referrerPolicy = 'no-referrer';
+  image.decoding = 'async';
+  message.style.display = 'block';
+  message.textContent = description || 'No photograph available for this aircraft.';
+  if (attribution) attribution.textContent = options.initialCaption || defaultCaption;
+
+  const finishOrFallback = () => {
+    if (fallback) { fallback(); return; }
+    message.textContent = description || 'No photograph available for this aircraft.';
+    if (sourceUrl) actions.appendChild(createDetailLink(sourceLinkLabel, sourceUrl));
+    else if (candidates.length) actions.appendChild(createDetailLink('Open Aircraft Photograph', candidates[0]));
+  };
+  if (!candidates.length) { finishOrFallback(); return; }
+
+  let index = 0;
+  const tryNext = () => {
+    if (index >= candidates.length) { finishOrFallback(); return; }
+    const candidate = candidates[index++];
+    image.onload = () => {
+      message.style.display = 'none';
+      image.style.display = 'block';
+      actions.replaceChildren();
+      actions.appendChild(createDetailLink(sourceUrl ? sourceLinkLabel : 'Open Full Photograph', sourceUrl || candidates[candidates.length - 1]));
+      if (attribution && options.caption) attribution.textContent = options.caption;
+    };
+    image.onerror = tryNext;
+    image.src = candidate;
+  };
+  tryNext();
+}
+
+async function fetchLocalAircraftByHex(rawHex) {
+  const hex = String(rawHex || '').replace(/[^0-9A-Fa-f]/g, '').toUpperCase();
+  if (hex.length !== 6) return null;
+  try {
+    const response = await fetch(`/api/aircraft/hex?hex=${encodeURIComponent(hex)}`, {cache: 'no-store'});
+    if (!response.ok) return null;
+    const payload = await response.json();
+    return payload && payload.matched && payload.aircraft ? payload.aircraft : null;
+  } catch (_) {
+    return null;
+  }
+}
+function localAircraftOperatorName(aircraft) {
+  if (!aircraft || typeof aircraft !== 'object') return '';
+  return String(
+    aircraft.operator ||
+    aircraft.registered_owner ||
+    aircraft.owner_operator ||
+    aircraft.ownOp ||
+    ''
+  ).trim();
+}
+function localAircraftRegistration(aircraft) {
+  if (!aircraft || typeof aircraft !== 'object') return '';
+  return String(aircraft.registration || aircraft.reg || '').trim().toUpperCase();
+}
+function localAircraftModelText(aircraft) {
+  if (!aircraft || typeof aircraft !== 'object') return '';
+  const type = String(aircraft.type || aircraft.icao_type || '').trim();
+  const model = String(aircraft.model || '').trim();
+  const description = String(aircraft.description || '').trim();
+  if (model && type && !model.toUpperCase().includes(type.toUpperCase())) return `${model} (${type})`;
+  return description || model || type;
+}
+
+async function fetchAircraftEnrichment(identifier, callsign = '') {
+  if (!identifier) return null;
+  let url = `https://api.adsbdb.com/v0/aircraft/${encodeURIComponent(identifier)}`;
+  if (callsign) url += `?callsign=${encodeURIComponent(callsign)}`;
+  const response = await fetch(url, {cache: 'no-store'});
+  if (!response.ok) return null;
+  const result = await response.json();
+  return result.response && typeof result.response === 'object' ? result.response : null;
+}
+/* Step 69: Wikimedia Commons generic aircraft-type photo fallback */
+let aircraftDetailPhotoRequestSequence = 0;
+function genericAircraftPhotoSearchTerm(aircraft) {
+  if (!aircraft || typeof aircraft !== 'object') return '';
+  const manufacturer = String(aircraft.manufacturer || '').trim();
+  const type = String(aircraft.type || aircraft.icao_type || '').trim();
+  if (!type || type.toLowerCase() === 'unavailable') return '';
+  return manufacturer && !type.toUpperCase().includes(manufacturer.toUpperCase()) ? `${manufacturer} ${type}` : type;
+}
+async function fetchGenericAircraftTypePhoto(aircraft) {
+  const searchTerm = genericAircraftPhotoSearchTerm(aircraft);
+  if (!searchTerm) return null;
+  const params = new URLSearchParams({
+    action: 'query', format: 'json', origin: '*', generator: 'search',
+    gsrsearch: `${searchTerm} aircraft filetype:bitmap`, gsrnamespace: '6', gsrlimit: '8',
+    prop: 'imageinfo', iiprop: 'url|mime', iiurlwidth: '720'
+  });
+  const response = await fetch(`https://commons.wikimedia.org/w/api.php?${params.toString()}`, {cache: 'force-cache'});
+  if (!response.ok) return null;
+  const payload = await response.json();
+  const pages = Object.values(payload.query && payload.query.pages ? payload.query.pages : {})
+    .filter(page => page.imageinfo && page.imageinfo[0] && page.imageinfo[0].thumburl)
+    .filter(page => /^image\//i.test(String(page.imageinfo[0].mime || 'image/unknown')));
+  if (!pages.length) return null;
+  const unwanted = /(logo|diagram|drawing|cockpit|interior|seat|map|badge)/i;
+  const page = pages.find(item => !unwanted.test(String(item.title || ''))) || pages[0];
+  const info = page.imageinfo[0];
+  return {
+    searchTerm,
+    thumbnailUrl: info.thumburl,
+    sourceUrl: info.descriptionurl || `https://commons.wikimedia.org/wiki/${encodeURIComponent(String(page.title || '').replace(/ /g, '_'))}`
+  };
+}
+async function applyGenericAircraftTypePhotoFallback(aircraft, requestSequence) {
+  const searchTerm = genericAircraftPhotoSearchTerm(aircraft);
+  if (!searchTerm || requestSequence !== aircraftDetailPhotoRequestSequence) return;
+  el('aircraftPhotoMessage').textContent = `Searching for a generic ${searchTerm} photo…`;
+  try {
+    const result = await fetchGenericAircraftTypePhoto(aircraft);
+    if (requestSequence !== aircraftDetailPhotoRequestSequence) return;
+    if (!result) {
+      setAircraftPhotoCandidates([], `No exact photograph or generic ${searchTerm} type photo was found.`);
+      return;
+    }
+    setAircraftPhotoCandidates([result.thumbnailUrl], `A generic ${result.searchTerm} photo could not be displayed.`, {
+      sourceUrl: result.sourceUrl,
+      sourceLinkLabel: 'Open Wikimedia Commons Source',
+      initialCaption: `Loading generic ${result.searchTerm} type photo from Wikimedia Commons…`,
+      caption: `Generic ${result.searchTerm} type photo — not this specific aircraft. Source: Wikimedia Commons.`
+    });
+  } catch (_) {
+    if (requestSequence === aircraftDetailPhotoRequestSequence) {
+      setAircraftPhotoCandidates([], `Generic ${searchTerm} photo lookup unavailable.`);
+    }
+  }
+}
+
+/* Step 68: callsign ICAO-prefix operator fallback lookup */
+function airlinePrefixFromCallsign(value) {
+  const callsign = String(value || '').trim().toUpperCase().replace(/\s+/g, '');
+  if (likelyTailNumber(callsign)) return '';
+  const match = callsign.match(/^([A-Z]{3})[0-9][A-Z0-9]*$/);
+  return match ? match[1] : '';
+}
+function routeOperatorFromAdsbdb(route) {
+  if (!route || !route.airline || typeof route.airline !== 'object') return null;
+  const name = String(route.airline.name || '').trim();
+  if (!name) return null;
+  return {
+    name,
+    icao: String(route.airline.icao || '').trim().toUpperCase(),
+    iata: String(route.airline.iata || '').trim().toUpperCase(),
+    source: 'ADSBDB route airline'
+  };
+}
+let localOperatorPrefixLookupPromise = null;
+async function loadLocalOperatorPrefixLookup() {
+  if (!localOperatorPrefixLookupPromise) {
+    localOperatorPrefixLookupPromise = fetch('/api/operator-prefixes.json', {cache: 'no-store'})
+      .then(response => response.ok ? response.json() : {operators: {}})
+      .catch(() => ({operators: {}}));
+  }
+  return localOperatorPrefixLookupPromise;
+}
+function operatorMatchFromRecord(prefix, record, source) {
+  if (!record) return null;
+  const normalized = typeof record === 'string' ? {name: record} : record;
+  const name = String(normalized.name || normalized.operator || '').trim();
+  if (!name) return null;
+  return {
+    name,
+    icao: String(normalized.icao || prefix).trim().toUpperCase(),
+    iata: String(normalized.iata || '').trim().toUpperCase(),
+    telephony: String(normalized.telephony || '').trim(),
+    category: String(normalized.category || '').trim(),
+    source
+  };
+}
+async function fetchLocalOperatorByCallsignPrefix(callsign) {
+  const prefix = airlinePrefixFromCallsign(callsign);
+  if (!prefix) return null;
+  const payload = await loadLocalOperatorPrefixLookup();
+  const operators = payload && payload.operators && typeof payload.operators === 'object' ? payload.operators : {};
+  return operatorMatchFromRecord(prefix, operators[prefix], 'local ICAO-prefix table');
+}
+async function fetchAdsbdbOperatorByCallsignPrefix(callsign) {
+  const prefix = airlinePrefixFromCallsign(callsign);
+  if (!prefix) return null;
+  const response = await fetch(`https://api.adsbdb.com/v0/airline/${encodeURIComponent(prefix)}`, {cache: 'no-store'});
+  if (!response.ok) return null;
+  const payload = await response.json();
+  const rows = payload && payload.response;
+  const candidates = Array.isArray(rows) ? rows : (rows && typeof rows === 'object' ? [rows] : []);
+  const exact = candidates.find(item => String(item.icao || '').toUpperCase() === prefix) || candidates[0];
+  return operatorMatchFromRecord(prefix, exact, 'ADSBDB ICAO-prefix fallback');
+}
+async function fetchOperatorByCallsignPrefix(callsign) {
+  const localMatch = await fetchLocalOperatorByCallsignPrefix(callsign);
+  if (localMatch) return localMatch;
+  return fetchAdsbdbOperatorByCallsignPrefix(callsign);
+}
+function displayOperatorMatch(match) {
+  if (!match || !match.name) return false;
+  const code = match.icao || match.iata || '';
+  let qualifier = '';
+  if (match.source === 'local ICAO-prefix table') qualifier = ` — ${code || 'prefix'} local fallback`;
+  else if (match.source === 'ADSBDB ICAO-prefix fallback') qualifier = ` — ${code || 'prefix'} ADSBDB fallback`;
+  const extra = match.telephony ? ` (${match.telephony})` : '';
+  detailValue('detailOperator', `${match.name}${extra}${qualifier}`);
+  return true;
+}
+async function applyAirlabsRouteToDetails(flight) {
+  const callsign = String(flight || '').trim().toUpperCase();
+  if (!callsign) {
+    detailValue('detailRouteSource', 'No callsign broadcast');
+    return;
+  }
+  try {
+    const result = await requestAirlabsDiagnosticRoute(callsign);
+    if (!result.configured) {
+      detailValue('detailRouteSource', 'AirLabs not configured');
+      return;
+    }
+    if (!result.matched) {
+      detailValue('detailRouteSource', 'AirLabs — no route match');
+      return;
+    }
+    detailValue('detailOrigin', formatAirlabsAirport(result.departure_iata, result.departure_icao));
+    detailValue('detailDestination', formatAirlabsAirport(result.arrival_iata, result.arrival_icao));
+    detailValue('detailRouteSource', result.cache_hit ? 'AirLabs Flight Information API (cached)' : 'AirLabs Flight Information API');
+    if (result.flight_iata) detailValue('detailFlight', `${callsign} / ${result.flight_iata}`);
+  } catch (error) {
+    detailValue('detailRouteSource', `AirLabs unavailable: ${error.message}`);
+  }
+}
+
+async function showAircraftDetails(aircraft) {
+  const flight = aircraft.flight ? String(aircraft.flight).trim().toUpperCase() : '';
+  const rawHex = String(aircraft.hex || '').replace(/^~/, '').toUpperCase();
+  const broadcastTail = likelyTailNumber(flight) ? flight : '';
+  const airlinePrefix = airlinePrefixFromCallsign(flight);
+  const title = flight || rawHex || 'Aircraft Details';
+  const photoRequestSequence = ++aircraftDetailPhotoRequestSequence;
+
+  el('aircraftDetailTitle').textContent = title;
+  el('aircraftDetailOverlay').classList.add('open');
+  detailValue('detailFlight', flight || 'Not broadcast');
+  detailValue('detailHex', rawHex || 'Not broadcast');
+  detailValue('detailRouteSource', 'Checking AirLabs…');
+  detailValue('detailRegistration', broadcastTail || 'Loading…');
+  detailValue('detailManufacturer', 'Loading…');
+  detailValue('detailModel', 'Loading…');
+  detailValue('detailOperator', 'Loading…');
+  detailValue('detailOrigin', flight && !broadcastTail ? 'Loading…' : 'Route unavailable');
+  detailValue('detailDestination', flight && !broadcastTail ? 'Loading…' : 'Route unavailable');
+  detailValue('detailAltitude', aircraft.alt_baro == null ? '—' : `${aircraft.alt_baro} ft`);
+  const speed = aircraft.gs == null ? '—' : `${aircraft.gs} kt`;
+  const track = aircraft.track == null ? '—' : `${aircraft.track}°`;
+  detailValue('detailMovement', `${speed} / ${track}`);
+  updateTailNumberActions(broadcastTail);
+  setAircraftPhotoCandidates([], 'Loading available aircraft photograph…');
+  setMessage('aircraftDetailStatus', 'Loading aircraft and route lookup information…', 'warning');
+
+  if (!rawHex && !broadcastTail) {
+    setMessage('aircraftDetailStatus', 'No ICAO hex or tail number is available for aircraft lookup.', 'warning');
+    detailValue('detailRegistration', 'Unavailable');
+    detailValue('detailManufacturer', 'Unavailable');
+    detailValue('detailModel', 'Unavailable');
+    detailValue('detailOperator', 'Unavailable');
+    setAircraftPhotoCandidates([], 'No aircraft photograph available.');
+    return;
+  }
+
+  try {
+    const localAircraft = rawHex ? await fetchLocalAircraftByHex(rawHex) : null;
+    let payload = await fetchAircraftEnrichment(rawHex || broadcastTail, flight && !broadcastTail ? flight : '');
+    let enrichedAircraft = payload ? payload.aircraft || null : null;
+    let route = payload ? payload.flightroute || null : null;
+    let operatorIdentified = false;
+
+    // For private/general aviation, readsb often broadcasts the tail number as
+    // flight. Use it as a second public aircraft-record lookup when Mode-S
+    // did not yield an aircraft match.
+    if (!enrichedAircraft && broadcastTail && broadcastTail !== rawHex) {
+      payload = await fetchAircraftEnrichment(broadcastTail, '');
+      enrichedAircraft = payload ? payload.aircraft || null : null;
+      route = route || (payload ? payload.flightroute || null : null);
+    }
+
+    if (enrichedAircraft) {
+      const registration = enrichedAircraft.registration || localAircraftRegistration(localAircraft) || broadcastTail || '';
+      detailValue('detailRegistration', registration || 'Unavailable');
+      detailValue('detailManufacturer', enrichedAircraft.manufacturer || (localAircraft && localAircraft.manufacturer) || 'Unavailable');
+      detailValue('detailModel', enrichedAircraft.type || enrichedAircraft.icao_type || localAircraftModelText(localAircraft) || 'Unavailable');
+      const registeredOwner = String(enrichedAircraft.registered_owner || localAircraftOperatorName(localAircraft) || '').trim();
+      if (registeredOwner) {
+        detailValue('detailOperator', registeredOwner);
+        operatorIdentified = true;
+      } else {
+        detailValue('detailOperator', airlinePrefix ? 'Searching callsign prefix…' : 'Unavailable');
+      }
+      updateTailNumberActions(registration);
+      setAircraftPhotoCandidates(
+        [enrichedAircraft.url_photo_thumbnail, enrichedAircraft.url_photo],
+        'No exact photograph available for this aircraft.',
+        {fallback: () => applyGenericAircraftTypePhotoFallback(enrichedAircraft, photoRequestSequence)}
+      );
+    } else if (localAircraft) {
+      const registration = localAircraftRegistration(localAircraft) || broadcastTail || '';
+      const localModel = localAircraftModelText(localAircraft);
+      const localOperator = localAircraftOperatorName(localAircraft);
+      detailValue('detailRegistration', registration || 'Unavailable');
+      detailValue('detailManufacturer', localAircraft.manufacturer || 'Unavailable');
+      detailValue('detailModel', localModel || 'Unavailable');
+      detailValue('detailOperator', localOperator || (airlinePrefix ? 'Searching callsign prefix…' : 'Unavailable'));
+      operatorIdentified = Boolean(localOperator);
+      updateTailNumberActions(registration || broadcastTail);
+      setAircraftPhotoCandidates([], 'No exact aircraft photograph available from the local ICAO hex database.', {
+        fallback: () => applyGenericAircraftTypePhotoFallback(localAircraft, photoRequestSequence)
+      });
+    } else {
+      detailValue('detailRegistration', broadcastTail || 'Unavailable');
+      detailValue('detailManufacturer', 'Unavailable');
+      detailValue('detailModel', 'Unavailable');
+      detailValue('detailOperator', airlinePrefix ? 'Searching callsign prefix…' : 'Unavailable');
+      updateTailNumberActions(broadcastTail);
+      setAircraftPhotoCandidates([], 'No photograph available for this aircraft.');
+    }
+
+    if (route) {
+      detailValue('detailFlight', route.callsign || flight || 'Unavailable');
+      detailValue('detailOrigin', formatAirport(route.origin));
+      detailValue('detailDestination', formatAirport(route.destination));
+    } else {
+      detailValue('detailOrigin', 'Route unavailable');
+      detailValue('detailDestination', 'Route unavailable');
+    }
+
+    if (!operatorIdentified) {
+      operatorIdentified = displayOperatorMatch(routeOperatorFromAdsbdb(route));
+    }
+    if (!operatorIdentified && airlinePrefix) {
+      try {
+        const fallbackOperator = await fetchOperatorByCallsignPrefix(flight);
+        operatorIdentified = displayOperatorMatch(fallbackOperator);
+        if (!operatorIdentified) detailValue('detailOperator', `No operator match for ${airlinePrefix}`);
+      } catch (operatorError) {
+        detailValue('detailOperator', `${airlinePrefix} lookup unavailable`);
+      }
+    }
+
+    if (enrichedAircraft || route || localAircraft) {
+      setMessage('aircraftDetailStatus', localAircraft && !enrichedAircraft
+        ? 'Aircraft lookup complete using the local ICAO hex database.'
+        : 'Aircraft lookup complete. Tail-number actions are available below the photo.', 'good');
+    } else {
+      setMessage('aircraftDetailStatus', 'No public aircraft, local aircraft, or route match was found for this target.', 'warning');
+    }
+  } catch (error) {
+    detailValue('detailRegistration', broadcastTail || 'Lookup unavailable');
+    detailValue('detailManufacturer', 'Lookup unavailable');
+    detailValue('detailModel', 'Lookup unavailable');
+    detailValue('detailOperator', 'Lookup unavailable');
+    detailValue('detailOrigin', 'Lookup unavailable');
+    detailValue('detailDestination', 'Lookup unavailable');
+    updateTailNumberActions(broadcastTail);
+    setAircraftPhotoCandidates([], 'Photograph lookup unavailable.');
+    setMessage('aircraftDetailStatus', `Public detail lookup unavailable: ${error.message}`, 'error');
+  }
+  await applyAirlabsRouteToDetails(flight);
+}
+
+async function updateAircraft() {
+  try {
+    const data = await jsonRequest('/api/aircraft.json');
+    const body = el('aircraftRows');
+    const aircraft = Array.isArray(data.aircraft) ? data.aircraft : [];
+    updateAircraftMap(aircraft);
+    const visibleAircraft = aircraft.slice(0, 20);
+    body.replaceChildren();
+    if (!visibleAircraft.length) {
+      body.innerHTML = '<tr><td colspan="4" class="empty">No current aircraft records.</td></tr>';
+      return;
+    }
+    for (const item of visibleAircraft) {
+      const row = document.createElement('tr');
+      row.className = 'active-plane-row';
+      row.title = 'Click for aircraft and flight details';
+      row.addEventListener('click', () => showAircraftDetails(item));
+      const flight = item.flight ? item.flight.trim() : '';
+      const values = [flight || String(item.hex || '').toUpperCase(), item.alt_baro, item.gs, item.seen];
+      for (const value of values) {
+        const cell = document.createElement('td');
+        cell.textContent = value == null ? '' : value;
+        row.appendChild(cell);
+      }
+      body.appendChild(row);
+    }
+  } catch (error) {
+    el('aircraftRows').innerHTML = `<tr><td colspan="8" class="empty">Aircraft data failed: ${error.message}</td></tr>`;
+  }
+}
+
+async function loadAirlabsSettings() {
+  try {
+    const status = await jsonRequest('/api/diagnostics/airlabs/status');
+    el('airlabsApiKey').value = '';
+    setMessage(
+      'airlabsMessage',
+      status.configured
+        ? `AirLabs route lookup configured (${status.key_hint}). Cached successful routes: ${status.route_cache_entries || 0}; expires after ${Math.round((status.cache_ttl_seconds || 7200) / 3600)} hours.`
+        : 'AirLabs is not configured. Paste an API key and save it here.',
+      status.configured ? 'good' : 'warning'
+    );
+  } catch (error) {
+    setMessage('airlabsMessage', `Unable to load AirLabs status: ${error.message}`, 'error');
+  }
+}
+async function saveAirlabsKey() {
+  const apiKey = el('airlabsApiKey').value.trim();
+  if (!apiKey) {
+    setMessage('airlabsMessage', 'Paste the AirLabs API key before saving.', 'warning');
+    return;
+  }
+  try {
+    const result = await jsonRequest('/api/diagnostics/airlabs/settings', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({api_key: apiKey})
+    });
+    if (!result.configured) throw new Error('Pi could not read back the saved AirLabs key.');
+    el('airlabsApiKey').value = '';
+    setMessage('airlabsMessage', `AirLabs key saved on the Pi (${result.key_hint}).`, 'good');
+  } catch (error) {
+    setMessage('airlabsMessage', `AirLabs key save failed: ${error.message}`, 'error');
+  }
+}
+async function clearAirlabsKey() {
+  try {
+    await jsonRequest('/api/diagnostics/airlabs/settings', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({clear: true})
+    });
+    el('airlabsApiKey').value = '';
+    setMessage('airlabsMessage', 'AirLabs key removed from the Pi.', 'good');
+  } catch (error) {
+    setMessage('airlabsMessage', `AirLabs key clear failed: ${error.message}`, 'error');
+  }
+}
+function formatAirlabsAirport(iata, icao) {
+  if (iata && icao) return `${iata} (${icao})`;
+  return iata || icao || 'Unavailable';
+}
+async function requestAirlabsDiagnosticRoute(flight) {
+  return await jsonRequest(`/api/diagnostics/airlabs/route?flight=${encodeURIComponent(flight || '')}`);
+}
+async function clearAirlabsRouteCache() {
+  try {
+    await jsonRequest('/api/diagnostics/airlabs/cache/clear', {method: 'POST'});
+    setMessage('airlabsMessage', 'AirLabs successful-route cache cleared. The next popup lookup will query AirLabs again.', 'good');
+  } catch (error) {
+    setMessage('airlabsMessage', `AirLabs cache clear failed: ${error.message}`, 'error');
+  }
+}
+
+async function testAirlabsKey() {
+  const flight = el('airlabsTestFlight').value.trim().toUpperCase();
+  if (!flight) {
+    setMessage('airlabsMessage', 'Enter an active airline callsign such as UAL1234.', 'warning');
+    return;
+  }
+  try {
+    setMessage('airlabsMessage', `Testing AirLabs route lookup for ${flight}…`, 'warning');
+    const result = await requestAirlabsDiagnosticRoute(flight);
+    if (result.matched) {
+      setMessage(
+        'airlabsMessage',
+        `${flight}: ${formatAirlabsAirport(result.departure_iata, result.departure_icao)} → ${formatAirlabsAirport(result.arrival_iata, result.arrival_icao)}.${result.cache_hit ? ' Cached result.' : ' Fresh AirLabs result cached for reuse.'}`,
+        'good'
+      );
+    } else {
+      setMessage('airlabsMessage', result.message || `No AirLabs route matched ${flight}.`, 'warning');
+    }
+  } catch (error) {
+    setMessage('airlabsMessage', `Route lookup test failed: ${error.message}`, 'error');
+  }
+}
+
+async function saveAirbandRadius() {
+  const radiusMiles = Number(el('locationRadius').value);
+  if (!Number.isFinite(radiusMiles) || radiusMiles <= 0 || radiusMiles > 500) {
+    setMessage('airbandRadiusMessage', 'Enter an Airband radius greater than 0 and no more than 500 miles.', 'error');
+    return;
+  }
+
+  const originalAirband = await readAirbandStatus();
+  const restartScan = Boolean(originalAirband.airband_scan_running) && airbandBackgroundWanted && !liveListening;
+
+  try {
+    if (restartScan) {
+      await showBusyAndPaint(
+        'Applying Airband scan radius…',
+        `Stopping background scan before rebuilding channels within ${radiusMiles.toFixed(1)} miles.`
+      );
+      airbandRestartSuspended = true;
+      const stopped = await stopAirbandBackground(false, false);
+      if (!stopped) throw new Error('Airband scanner did not release the receiver.');
+    }
+
+    const result = await jsonRequest('/api/settings/airband-radius', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({airband_radius_miles: radiusMiles})
+    });
+    renderLocation(result.receiver_location);
+    setMessage(
+      'airbandRadiusMessage',
+      `Airband scan radius set to ${Number(result.receiver_location.airband_radius_miles).toFixed(1)} miles. Saved NOAA selection preserved.`,
+      'good'
+    );
+
+    if (restartScan) {
+      airbandRestartSuspended = false;
+      await startAirbandBackground(false);
+      setMessage(
+        'airbandRadiusMessage',
+        `Airband scan radius set to ${Number(result.receiver_location.airband_radius_miles).toFixed(1)} miles; background scan restarted with nearby channels only.`,
+        'good'
+      );
+    }
+  } catch (error) {
+    setMessage('airbandRadiusMessage', `Airband radius update failed: ${error.message}`, 'error');
+    if (restartScan && airbandBackgroundWanted && !liveListening) {
+      airbandRestartSuspended = false;
+      await startAirbandBackground(false);
+    }
+  } finally {
+    airbandRestartSuspended = false;
+    hideBusy();
+    await refreshOperationMenu();
+  }
+}
+
+async function saveLocation() {
+  try {
+    const payload = {
+      name: el('locationName').value,
+      latitude: el('locationLatitude').value,
+      longitude: el('locationLongitude').value,
+      airband_radius_miles: el('locationRadius').value
+    };
+    const result = await jsonRequest('/api/settings/receiver', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    });
+    delete el('locationName').dataset.edited;
+    renderLocation(result.receiver_location);
+  } catch (error) {
+    setMessage('locationMessage', `Location save failed: ${error.message}`, 'error');
+  }
+}
+
+async function captureNoaa() {
+  setMessage('audioMessage', 'Capturing 10 seconds of NOAA audio while ADS-B continues…', 'warning');
+  try {
+    const response = await fetch(`/api/noaa/capture.wav?seconds=10&request=${Date.now()}`, {cache: 'no-store'});
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const blob = await response.blob();
+    if (audioObjectUrl) URL.revokeObjectURL(audioObjectUrl);
+    audioObjectUrl = URL.createObjectURL(blob);
+    el('audioPlayer').src = audioObjectUrl;
+    el('audioPlayer').load();
+    setMessage('audioMessage', 'NOAA capture complete. Press Play to listen.', 'good');
+  } catch (error) {
+    setMessage('audioMessage', `NOAA capture failed: ${error.message}`, 'error');
+  }
+}
+
+async function pumpLiveAudio() {
+  if (!liveListening || !liveAudioContext) return;
+  try {
+    if (liveAudioContext.state !== 'running') await liveAudioContext.resume();
+    if (liveAudioContext.state !== 'running') {
+      throw new Error(`Shared scanner audio output is ${liveAudioContext.state}; click Reconnect NOAA Audio.`);
+    }
+    const response = await fetch(`/api/noaa/live/audio.wav?from=${liveNextCursor}&samples=12000&request=${Date.now()}`, {cache: 'no-store'});
+    if (response.status === 204) {
+      livePumpTimer = window.setTimeout(pumpLiveAudio, 120);
+      return;
+    }
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const sourceSamples = Number(response.headers.get('X-Source-Samples') || 0);
+    const data = await response.arrayBuffer();
+    const decoded = await liveAudioContext.decodeAudioData(data.slice(0));
+    let energy = 0;
+    let sampleCount = 0;
+    for (let channel = 0; channel < decoded.numberOfChannels; channel += 1) {
+      const samples = decoded.getChannelData(channel);
+      const stride = Math.max(1, Math.floor(samples.length / 4096));
+      for (let index = 0; index < samples.length; index += stride) {
+        energy += samples[index] * samples[index];
+        sampleCount += 1;
+      }
+    }
+    noaaPlaybackLastChunkRms = sampleCount ? Math.sqrt(energy / sampleCount) : 0;
+    const source = liveAudioContext.createBufferSource();
+    source.buffer = decoded;
+    source.connect(liveAudioContext.destination);
+    const startAt = Math.max(liveAudioContext.currentTime + 0.04, liveNextPlayTime);
+    source.start(startAt);
+    liveNextPlayTime = startAt + decoded.duration;
+    liveNextCursor += sourceSamples;
+    noaaPlaybackChunksScheduled += 1;
+    if (noaaPlaybackChunksScheduled === 1) {
+      setMessage('audioMessage', `NOAA live audio playing through shared scanner output · stream RMS ${noaaPlaybackLastChunkRms.toFixed(4)}.`, 'good');
+    }
+    const bufferedSeconds = liveNextPlayTime - liveAudioContext.currentTime;
+    livePumpTimer = window.setTimeout(pumpLiveAudio, bufferedSeconds > 1.4 ? 250 : 20);
+  } catch (error) {
+    liveListening = false;
+    setMessage('audioMessage', `NOAA shared-output playback failed: ${error.message}. Click Reconnect NOAA Audio.`, 'error');
+    await refreshOperationMenu();
+  }
+}
+
+async function prepareAirbandAudio() {
+  if (!airbandAudioContext) airbandAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+  await airbandAudioContext.resume();
+  airbandAudioAuthorized = true;
+}
+function stopAirbandPlayback() {
+  if (airbandPumpTimer) {
+    window.clearTimeout(airbandPumpTimer);
+    airbandPumpTimer = null;
+  }
+  airbandAudioCursor = 0;
+  airbandNextPlayTime = airbandAudioContext ? airbandAudioContext.currentTime : 0;
+  airbandPlayingHoldId = null;
+}
+async function pumpAirbandAudio(holdId) {
+  if (!airbandAudioAuthorized || !airbandAudioContext || airbandPlayingHoldId !== holdId) return;
+  try {
+    const response = await fetch(`/api/airband/scan/live/audio.wav?from=${airbandAudioCursor}&request=${Date.now()}`, {cache: 'no-store'});
+    if (response.status === 204) {
+      airbandPumpTimer = window.setTimeout(() => pumpAirbandAudio(holdId), 90);
+      return;
+    }
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const sourceSamples = Number(response.headers.get('X-Source-Samples') || 0);
+    const decoded = await airbandAudioContext.decodeAudioData((await response.arrayBuffer()).slice(0));
+    const source = airbandAudioContext.createBufferSource();
+    source.buffer = decoded;
+    source.connect(airbandAudioContext.destination);
+    const startAt = Math.max(airbandAudioContext.currentTime + 0.04, airbandNextPlayTime);
+    source.start(startAt);
+    airbandNextPlayTime = startAt + decoded.duration;
+    airbandAudioCursor += sourceSamples;
+    const bufferedSeconds = airbandNextPlayTime - airbandAudioContext.currentTime;
+    airbandPumpTimer = window.setTimeout(() => pumpAirbandAudio(holdId), bufferedSeconds > 1.4 ? 180 : 20);
+  } catch (error) {
+    setMessage('operationsMessage', `Airband live audio failed: ${error.message}`, 'error');
+    stopAirbandPlayback();
+  }
+}
+function renderBlockedAirbandFrequencies(status) {
+  const target = el('airbandBlockedMessage');
+  if (!target) return;
+  const blocked = Array.isArray(status.airband_blocked_frequencies_hz) ? status.airband_blocked_frequencies_hz : [];
+  target.textContent = blocked.length
+    ? `Blocked: ${blocked.map(value => (Number(value) / 1000000).toFixed(3) + ' MHz').join(', ')}`
+    : 'No frequencies blocked.';
+}
+function syncAirbandHoldAudio(status) {
+  renderBlockedAirbandFrequencies(status);
+  const holding = Boolean(status.airband_hold_active);
+  el('airbandSkipHeld').disabled = !holding;
+  el('airbandBlockHeld').disabled = !holding;
+  if (!holding) {
+    if (airbandPlayingHoldId !== null) stopAirbandPlayback();
+    return;
+  }
+  const channel = status.airband_hold_channel || {};
+  const mhz = Number(channel.frequency_mhz || Number(channel.frequency_hz || 0) / 1000000).toFixed(3);
+  const rms = status.airband_hold_rms_sample == null ? '—' : Number(status.airband_hold_rms_sample).toFixed(1);
+  const quiet = Number(status.airband_hold_quiet_seconds || 0).toFixed(1);
+  setMessage('operationsMessage', `HOLD ${mhz} MHz AM · ${rms} RMS · live audio · quiet ${quiet}/7.0 sec`, 'good');
+  if (airbandAudioAuthorized && airbandPlayingHoldId !== status.airband_hold_id) {
+    stopAirbandPlayback();
+    airbandPlayingHoldId = status.airband_hold_id;
+    airbandAudioCursor = 0;
+    airbandNextPlayTime = airbandAudioContext.currentTime + 0.08;
+    pumpAirbandAudio(airbandPlayingHoldId);
+  }
+}
+async function skipHeldAirbandChannel() {
+  try {
+    const result = await jsonRequest('/api/airband/scan/activity/skip', {method: 'POST'});
+    stopAirbandPlayback();
+    renderBlockedAirbandFrequencies(result);
+    setMessage('operationsMessage', 'Held Airband channel skipped. Scanning resumed.', 'good');
+  } catch (error) {
+    setMessage('operationsMessage', `Skip failed: ${error.message}`, 'error');
+  }
+}
+async function blockHeldAirbandChannel() {
+  try {
+    const result = await jsonRequest('/api/airband/scan/activity/block', {method: 'POST'});
+    stopAirbandPlayback();
+    renderBlockedAirbandFrequencies(result);
+    setMessage('operationsMessage', `Blocked ${(Number(result.frequency_hz) / 1000000).toFixed(3)} MHz. Scanning resumed.`, 'good');
+  } catch (error) {
+    setMessage('operationsMessage', `Block failed: ${error.message}`, 'error');
+  }
+}
+async function clearBlockedAirbandFrequencies() {
+  try {
+    const result = await jsonRequest('/api/airband/scan/blocks/clear', {method: 'POST'});
+    renderBlockedAirbandFrequencies(result);
+    setMessage('airbandBlockedMessage', 'Blocked frequency list cleared.', 'good');
+  } catch (error) {
+    setMessage('airbandBlockedMessage', `Unable to clear blocks: ${error.message}`, 'error');
+  }
+}
+
+async function rescanSavedNoaaChannel() {
+  if (operationTransitionActive) return;
+  operationTransitionActive = true;
+  setOperationButtonsDisabled(true);
+  airbandRestartSuspended = true;
+  closeMenu();
+
+  try {
+    await prepareNoaaAudioForStart(true);
+    const status = requireObjectResponse(await jsonRequest('/api/status'), 'Receiver status');
+    const airband = await readAirbandStatus();
+
+    await showBusyAndPaint(
+      'Rescanning NOAA Weather channels…',
+      'Clearing the saved local channel and running one fast spectrum search across all seven NOAA frequencies.'
+    );
+
+    if (status.live_audio_running || liveListening) {
+      await stopLive(true);
+    }
+    if (airband.airband_scan_running) {
+      const released = await stopAirbandBackground(true, false);
+      if (!released) throw new Error('Airband did not release the shared receiver.');
+    }
+
+    await autoNoaa(true);
+    await hideBusyAfterMinimum(550);
+    setMessage('locationMessage', 'NOAA local channel rescanned and saved for the current receiver location.', 'good');
+  } catch (error) {
+    hideBusy();
+    airbandRestartSuspended = false;
+    airbandBackgroundWanted = false;
+    airbandPausedForNoaa = false;
+    await releaseUnusedPreparedNoaaAudio();
+    setMessage('locationMessage', `NOAA rescan failed: ${error.message}. Airband remains stopped.`, 'error');
+  } finally {
+    operationTransitionActive = false;
+    setOperationButtonsDisabled(false);
+    await refreshOperationMenu();
+  }
+}
+
+
+function makeNoaaSilentWavUrl() {
+  const sampleRate = 8000;
+  const sampleCount = sampleRate;
+  const buffer = new ArrayBuffer(44 + sampleCount * 2);
+  const view = new DataView(buffer);
+  const putText = (offset, value) => {
+    for (let index = 0; index < value.length; index += 1) view.setUint8(offset + index, value.charCodeAt(index));
+  };
+  putText(0, 'RIFF');
+  view.setUint32(4, 36 + sampleCount * 2, true);
+  putText(8, 'WAVE');
+  putText(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  putText(36, 'data');
+  view.setUint32(40, sampleCount * 2, true);
+  return URL.createObjectURL(new Blob([buffer], {type: 'audio/wav'}));
+}
+function rmsFromNoaaWavArrayBuffer(buffer) {
+  if (!buffer || buffer.byteLength <= 44) return 0;
+  const view = new DataView(buffer);
+  let sum = 0;
+  let count = 0;
+  for (let offset = 44; offset + 1 < buffer.byteLength; offset += 8) {
+    const value = view.getInt16(offset, true) / 32768;
+    sum += value * value;
+    count += 1;
+  }
+  return count ? Math.sqrt(sum / count) : 0;
+}
+function resetNoaaHtmlAudioOutput() {
+  noaaHtmlAudioGeneration += 1;
+  noaaHtmlAudioQueue.forEach(item => URL.revokeObjectURL(item.url));
+  noaaHtmlAudioQueue = [];
+  noaaHtmlAudioFetchBusy = false;
+  noaaHtmlAudioRealPlaybackStarted = false;
+  if (noaaHtmlAudioElement) {
+    noaaHtmlAudioElement.onended = null;
+    noaaHtmlAudioElement.onerror = null;
+    noaaHtmlAudioElement.pause();
+    noaaHtmlAudioElement.removeAttribute('src');
+    noaaHtmlAudioElement.load();
+  }
+  if (noaaHtmlAudioCurrentUrl) URL.revokeObjectURL(noaaHtmlAudioCurrentUrl);
+  if (noaaHtmlAudioPrimerUrl) URL.revokeObjectURL(noaaHtmlAudioPrimerUrl);
+  noaaHtmlAudioCurrentUrl = null;
+  noaaHtmlAudioPrimerUrl = null;
+  noaaHtmlAudioElement = null;
+}
+async function primeNoaaHtmlAudioOutput() {
+  /* Step 76: preserve authorized NOAA HTML player during restart scan */
+  if (noaaHtmlAudioElement && noaaHtmlAudioPrimerUrl && !noaaHtmlAudioRealPlaybackStarted) {
+    noaaHtmlAudioElement.onended = null;
+    noaaHtmlAudioElement.onerror = null;
+    noaaHtmlAudioElement.volume = 0;
+    noaaHtmlAudioElement.loop = true;
+    noaaHtmlAudioElement.src = noaaHtmlAudioPrimerUrl;
+    if (noaaHtmlAudioElement.paused) await noaaHtmlAudioElement.play();
+    return;
+  }
+  resetNoaaHtmlAudioOutput();
+  noaaHtmlAudioElement = new Audio();
+  noaaHtmlAudioElement.preload = 'auto';
+  noaaHtmlAudioElement.playsInline = true;
+  noaaHtmlAudioElement.volume = 0;
+  noaaHtmlAudioElement.loop = true;
+  noaaHtmlAudioPrimerUrl = makeNoaaSilentWavUrl();
+  noaaHtmlAudioElement.src = noaaHtmlAudioPrimerUrl;
+  await noaaHtmlAudioElement.play();
+}
+async function playNextNoaaHtmlAudioChunk() {
+  if (!liveListening || !noaaHtmlAudioElement || !noaaHtmlAudioQueue.length) return;
+  const next = noaaHtmlAudioQueue.shift();
+  if (noaaHtmlAudioCurrentUrl) URL.revokeObjectURL(noaaHtmlAudioCurrentUrl);
+  noaaHtmlAudioCurrentUrl = next.url;
+  noaaHtmlAudioElement.loop = false;
+  noaaHtmlAudioElement.volume = 1;
+  noaaHtmlAudioElement.src = next.url;
+  noaaHtmlAudioElement.onended = () => {
+    if (liveListening && noaaHtmlAudioQueue.length) {
+      playNextNoaaHtmlAudioChunk().catch(error => {
+        setMessage('audioMessage', `NOAA HTML playback failed: ${error.message}`, 'error');
+      });
+    }
+  };
+  await noaaHtmlAudioElement.play();
+  noaaPlaybackChunksScheduled += 1;
+  if (!noaaHtmlAudioRealPlaybackStarted) {
+    noaaHtmlAudioRealPlaybackStarted = true;
+    setMessage(
+      'audioMessage',
+      `NOAA live audio playing through HTML player · stream RMS ${next.rms.toFixed(4)}.`,
+      'good'
+    );
+  }
+}
+async function fillNoaaHtmlAudioQueue() {
+  if (!liveListening || !noaaHtmlAudioElement || noaaHtmlAudioFetchBusy) return;
+  noaaHtmlAudioFetchBusy = true;
+  const generation = noaaHtmlAudioGeneration;
+  try {
+    while (liveListening && generation === noaaHtmlAudioGeneration && noaaHtmlAudioQueue.length < 4) {
+      const response = await fetch(`/api/noaa/live/audio.wav?from=${liveNextCursor}&samples=12000&request=${Date.now()}`, {cache: 'no-store'});
+      if (response.status === 204) break;
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const sourceSamples = Number(response.headers.get('X-Source-Samples') || 0);
+      const data = await response.arrayBuffer();
+      noaaPlaybackLastChunkRms = rmsFromNoaaWavArrayBuffer(data);
+      noaaHtmlAudioQueue.push({
+        url: URL.createObjectURL(new Blob([data], {type: 'audio/wav'})),
+        rms: noaaPlaybackLastChunkRms
+      });
+      liveNextCursor += sourceSamples;
+    }
+    if (!noaaHtmlAudioRealPlaybackStarted && noaaHtmlAudioQueue.length >= 2) {
+      await playNextNoaaHtmlAudioChunk();
+    } else if (noaaHtmlAudioRealPlaybackStarted && noaaHtmlAudioElement.paused && noaaHtmlAudioQueue.length) {
+      await playNextNoaaHtmlAudioChunk();
+    }
+  } finally {
+    noaaHtmlAudioFetchBusy = false;
+  }
+}
+
+async function prepareNoaaAudioForStart(forceFreshContext = false) {
+  /* Step 77: NOAA uses the proven shared Airband scanner audio output */
+  // Live testing proved that Airband's browser audio output is audible while
+  // separate NOAA outputs are silent. Arm that same output on this NOAA click.
+  if (typeof resetNoaaHtmlAudioOutput === 'function') resetNoaaHtmlAudioOutput();
+  await prepareAirbandAudio();
+  liveAudioContext = airbandAudioContext;
+  noaaAudioUsesAirbandContext = true;
+  if (!liveAudioContext) throw new Error('Shared scanner audio output could not be created.');
+  await liveAudioContext.resume();
+  if (liveAudioContext.state !== 'running') {
+    throw new Error(`Shared scanner audio output is ${liveAudioContext.state}. Click Reconnect NOAA Audio.`);
+  }
+  const primer = liveAudioContext.createBuffer(1, 1, liveAudioContext.sampleRate);
+  const primerSource = liveAudioContext.createBufferSource();
+  primerSource.buffer = primer;
+  primerSource.connect(liveAudioContext.destination);
+  primerSource.start();
+  noaaAudioPreparedForStart = true;
+  noaaPlaybackLastChunkRms = null;
+  noaaPlaybackChunksScheduled = 0;
+}
+
+async function releaseUnusedPreparedNoaaAudio() {
+  if (typeof resetNoaaHtmlAudioOutput === 'function') resetNoaaHtmlAudioOutput();
+  noaaAudioPreparedForStart = false;
+}
+
+async function startLive() {
+  try {
+    await prepareNoaaAudioForStart(true);
+    await jsonRequest('/api/noaa/live/start', {method: 'POST'});
+    liveListening = true;
+    noaaAudioPreparedForStart = false;
+    noaaPlaybackChunksScheduled = 0;
+    liveNextCursor = 0;
+    liveNextPlayTime = liveAudioContext.currentTime + 0.20;
+    setMessage('audioMessage', 'Live NOAA listening active. ADS-B continues.', 'good');
+    await updateStatus();
+    pumpLiveAudio();
+  } catch (error) {
+    await releaseUnusedPreparedNoaaAudio();
+    setMessage('audioMessage', `Unable to start NOAA: ${error.message}`, 'error');
+  }
+}
+
+async function stopLive(preserveAudioContext = false) {
+  liveListening = false;
+  noaaPlaybackChunksScheduled = 0;
+  noaaPlaybackLastChunkRms = null;
+  if (livePumpTimer) {
+    window.clearTimeout(livePumpTimer);
+    livePumpTimer = null;
+  }
+  if (typeof resetNoaaHtmlAudioOutput === 'function') resetNoaaHtmlAudioOutput();
+  try { await jsonRequest('/api/noaa/live/stop', {method: 'POST'}); } catch (_) {}
+  // Keep the shared scanner output available for the next explicit NOAA or
+  // Airband action; no queued NOAA chunks remain after liveListening=false.
+  liveAudioContext = airbandAudioContext || null;
+  noaaAudioUsesAirbandContext = Boolean(liveAudioContext);
+  noaaAudioPreparedForStart = false;
+  setMessage('audioMessage', 'NOAA listening stopped.', '');
+  await updateStatus();
+}
+
+async function attachExistingNoaaLive(status) {
+  await prepareNoaaAudioForStart();
+  liveListening = true;
+  noaaAudioPreparedForStart = false;
+  noaaPlaybackChunksScheduled = 0;
+  liveNextCursor = 0;
+  liveNextPlayTime = liveAudioContext.currentTime + 0.08;
+  const selected = (Number(status.noaa_frequency_hz) / 1000000).toFixed(3);
+  setMessage('audioMessage', `Reconnecting browser audio to NOAA ${selected} MHz…`, 'warning');
+  pumpLiveAudio();
+}
+
+async function autoNoaa(forceRescan = false) {
+  await prepareNoaaAudioForStart();
+  const noaaEndpoint = forceRescan ? '/api/noaa/auto/rescan' : '/api/noaa/auto/start';
+  setMessage(
+    'surveyResult',
+    forceRescan ? 'Rescanning NOAA channels and validating clear weather audio…' : 'Starting the saved NOAA channel, or rescanning if the receiver location changed…',
+    'warning'
+  );
+
+  try {
+    const status = await jsonRequest(noaaEndpoint, {method: 'POST'});
+    liveListening = true;
+    noaaAudioPreparedForStart = false;
+    noaaPlaybackChunksScheduled = 0;
+    liveNextCursor = 0;
+    liveNextPlayTime = liveAudioContext.currentTime + 0.20;
+    const selected = (Number(status.noaa_frequency_hz) / 1000000).toFixed(3);
+
+
+    const carrierEvidence = status.survey && status.survey.selected_carrier_margin_db != null
+      ? ` · carrier +${Number(status.survey.selected_carrier_margin_db).toFixed(1)} dB`
+      : '';
+    const audioEvidence = status.survey && status.survey.selected_audio_quality_db != null
+      ? ` · audio quality ${Number(status.survey.selected_audio_quality_db).toFixed(1)} dB`
+      : '';
+    const savedChannelEvidence = status.saved_channel_reused ? ' · saved channel reused' : '';
+    setMessage('surveyResult', `Selected ${selected} MHz${carrierEvidence}${audioEvidence} and started live listening.`, 'good');
+    setMessage('audioMessage', `NOAA listening active on ${selected} MHz.`, 'good');
+    pumpLiveAudio();
+    await updateStatus();
+    return status;
+  } catch (error) {
+    await releaseUnusedPreparedNoaaAudio();
+    setMessage('surveyResult', `NOAA start failed: ${error.message}`, 'error');
+    throw error;
+  }
+}
+
+async function loadAirbandChannels() {
+  try {
+    const result = await jsonRequest('/api/airband/channels');
+    const rows = el('airbandRows');
+    rows.replaceChildren();
+    setMessage('airbandListMessage',
+      `Loaded ${result.channel_count} unique AM frequencies within ${result.radius_miles} miles; ${result.duplicate_records_removed || 0} duplicate records removed.`,
+      'good');
+    if (!result.channels.length) {
+      rows.innerHTML = '<tr><td colspan="5" class="empty">No channels found within configured radius.</td></tr>';
+      return;
+    }
+    for (const channel of result.channels.slice(0, 40)) {
+      const row = document.createElement('tr');
+      const values = [
+        Number(channel.frequency_mhz).toFixed(3),
+        channel.airport_id || channel.airport_name || '',
+        channel.use || '',
+        channel.distance_miles
+      ];
+      for (const value of values) {
+        const cell = document.createElement('td');
+        cell.textContent = value;
+        row.appendChild(cell);
+      }
+      const action = document.createElement('td');
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = 'Test 10 sec';
+      button.addEventListener('click', () => testAirbandCapture(channel));
+      action.appendChild(button);
+      row.appendChild(action);
+      rows.appendChild(row);
+    }
+  } catch (error) {
+    setMessage('airbandListMessage', `Airband list failed: ${error.message}`, 'error');
+  }
+}
+
+async function testAirbandCapture(channel) {
+  setMessage('airbandAudioMessage', `Capturing ${Number(channel.frequency_mhz).toFixed(3)} MHz AM diagnostic audio…`, 'warning');
+  try {
+    const response = await fetch(`/api/airband/capture.wav?frequency_hz=${channel.frequency_hz}&seconds=10&request=${Date.now()}`, {cache: 'no-store'});
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    el('airbandPlayer').src = url;
+    el('airbandPlayer').load();
+    setMessage('airbandAudioMessage', 'AM diagnostic capture complete. Live RF detection remains unvalidated.', 'good');
+  } catch (error) {
+    setMessage('airbandAudioMessage', `AM diagnostic failed: ${error.message}`, 'error');
+  }
+}
+
+async function startExperimentalScan() {
+  try {
+    const scope = el('airbandScanScope').value;
+    const result = await jsonRequest(`/api/airband/scan/activity/start?scope=${encodeURIComponent(scope)}`, {method: 'POST'});
+    el('activityScanStart').disabled = true;
+    el('activityScanStop').disabled = false;
+    setMessage('airbandScanStatus',
+      `Experimental scan started: ${result.channel_count} channels (${result.scan_scope || scope}). RF validation deferred.`,
+      'warning');
+    pollExperimentalScan();
+  } catch (error) {
+    setMessage('airbandScanStatus', `Experimental scan failed: ${error.message}`, 'error');
+  }
+}
+
+async function stopExperimentalScan() {
+  try { await jsonRequest('/api/airband/scan/activity/stop', {method: 'POST'}); } catch (_) {}
+  el('activityScanStart').disabled = false;
+  el('activityScanStop').disabled = true;
+  setMessage('airbandScanStatus', 'Experimental RF scan stopped.', 'warning');
+}
+
+async function pollExperimentalScan() {
+  try {
+    const status = requireObjectResponse(await jsonRequest('/api/airband/scan/status'), 'Airband status');
+    syncAirbandHoldAudio(status);
+    if (!status.airband_scan_running) {
+      el('activityScanStart').disabled = false;
+      el('activityScanStop').disabled = true;
+      refreshOperationMenu();
+      return;
+    }
+    const channel = status.airband_current_channel;
+    if (status.airband_hold_active) {
+      const held = status.airband_hold_channel || channel || {};
+      setMessage(
+        'airbandScanStatus',
+        `HOLD ${Number(held.frequency_mhz).toFixed(3)} MHz AM; live audio active; RMS ${Number(status.airband_hold_rms_sample || 0).toFixed(1)}; quiet ${Number(status.airband_hold_quiet_seconds || 0).toFixed(1)}/7.0 sec.`,
+        'good'
+      );
+    } else if (status.airband_search_mode === 'fast_spectrum') {
+      const bestCarrier = status.airband_spectrum_best_frequency_hz == null
+        ? '—'
+        : `${(Number(status.airband_spectrum_best_frequency_hz) / 1000000).toFixed(3)} MHz`;
+      setMessage(
+        'airbandScanStatus',
+        `FAST 120–130 MHz: sweeps ${status.airband_spectrum_sweeps || 0}; ` +
+        `carrier candidates ${status.airband_spectrum_candidate_count || 0}; ` +
+        `best ${bestCarrier} / +${status.airband_spectrum_best_margin_db == null ? '—' : Number(status.airband_spectrum_best_margin_db).toFixed(1)} dB; ` +
+        `AM validations ${status.airband_spectrum_validation_count || 0}.`,
+        'warning'
+      );
+    } else {
+      setMessage(
+        'airbandScanStatus',
+        `Scanner (${status.airband_scan_scope || 'priority'}): samples ${status.airband_channels_scanned || 0}` +
+        (channel ? `; ${Number(channel.frequency_mhz).toFixed(3)} MHz` : '') +
+        `; RMS ${status.airband_last_measurement_dbfs == null ? '—' : status.airband_last_measurement_dbfs}.`,
+        'warning'
+      );
+    }
+    window.setTimeout(pollExperimentalScan, 300);
+  } catch (error) {
+    setMessage('airbandScanStatus', `Airband scanner status failed: ${error.message}`, 'error');
+  }
+}
+
+async function startAirbandTest() {
+  try {
+    await jsonRequest('/api/airband/test/start', {method: 'POST'});
+    airbandTestPlayedEventId = 0;
+    setMessage('airbandTestStatus', 'SIMULATED: Test scanner starting.', 'warning');
+    pollAirbandTest();
+  } catch (error) {
+    setMessage('airbandTestStatus', `SIMULATED test failed: ${error.message}`, 'error');
+  }
+}
+
+async function airbandTestCommand(command) {
+  try {
+    await jsonRequest(`/api/airband/test/${command}`, {method: 'POST'});
+    pollAirbandTest();
+  } catch (error) {
+    setMessage('airbandTestStatus', `SIMULATED command failed: ${error.message}`, 'error');
+  }
+}
+
+async function pollAirbandTest() {
+  try {
+    const status = await jsonRequest('/api/airband/test/status');
+    const running = Boolean(status.airband_test_running);
+    const state = status.airband_test_state || 'idle';
+    el('airbandTestStart').disabled = running;
+    el('airbandTestStop').disabled = !running;
+    el('airbandTestHold').disabled = !running || state === 'held';
+    el('airbandTestSkip').disabled = !running;
+    el('airbandTestResume').disabled = !running || state !== 'held';
+
+    let message = status.airband_test_message || 'SIMULATED: Test scanner idle.';
+    if (status.airband_test_silence_remaining != null) {
+      message += ` Silence remaining ${status.airband_test_silence_remaining} seconds.`;
+    }
+    setMessage('airbandTestStatus', message,
+      (state === 'listening_simulated_activity' || state === 'held') ? 'good' : 'warning');
+
+    if (state === 'listening_simulated_activity' && status.airband_test_event_id !== airbandTestPlayedEventId) {
+      airbandTestPlayedEventId = status.airband_test_event_id;
+      el('airbandTestPlayer').src = `/api/airband/test/audio.wav?event=${airbandTestPlayedEventId}`;
+      el('airbandTestPlayer').load();
+      try { await el('airbandTestPlayer').play(); } catch (_) {}
+    }
+    if (running) window.setTimeout(pollAirbandTest, 300);
+  } catch (error) {
+    setMessage('airbandTestStatus', `SIMULATED status failed: ${error.message}`, 'error');
+  }
+}
+
+let airbandBackgroundWanted = false;
+let airbandPausedForNoaa = false;
+let airbandRestartSuspended = false;
+let operationTransitionActive = false;
+let operationsRefreshTimer = null;
+let busyStartedAt = 0;
+let busyElapsedTimer = null;
+
+function showBusy(title, detail = '') {
+  const overlay = el('busyOverlay');
+  if (!overlay) return;
+  el('busyTitle').textContent = title;
+  el('busyDetail').textContent = detail || 'Preparing the shared audio receiver.';
+  busyStartedAt = Date.now();
+  if (el('busyElapsed')) el('busyElapsed').textContent = 'Elapsed: 0 seconds';
+  overlay.classList.add('open');
+  if (busyElapsedTimer) window.clearInterval(busyElapsedTimer);
+  busyElapsedTimer = window.setInterval(() => {
+    if (el('busyElapsed')) {
+      const seconds = Math.floor((Date.now() - busyStartedAt) / 1000);
+      el('busyElapsed').textContent = `Elapsed: ${seconds} second${seconds === 1 ? '' : 's'}`;
+    }
+  }, 250);
+}
+function updateBusy(title, detail = '') {
+  if (el('busyTitle')) el('busyTitle').textContent = title;
+  if (el('busyDetail')) el('busyDetail').textContent = detail;
+}
+function nextPaintFrame() {
+  return new Promise(resolve => {
+    window.requestAnimationFrame(() => window.requestAnimationFrame(resolve));
+  });
+}
+async function showBusyAndPaint(title, detail = '') {
+  showBusy(title, detail);
+  await nextPaintFrame();
+}
+async function hideBusyAfterMinimum(milliseconds = 500) {
+  const remaining = milliseconds - (Date.now() - busyStartedAt);
+  if (remaining > 0) await new Promise(resolve => window.setTimeout(resolve, remaining));
+  hideBusy();
+}
+function hideBusy() {
+  if (busyElapsedTimer) {
+    window.clearInterval(busyElapsedTimer);
+    busyElapsedTimer = null;
+  }
+  const overlay = el('busyOverlay');
+  if (overlay) overlay.classList.remove('open');
+}
+function setOperationButtonsDisabled(disabled) {
+  el('noaaMenuToggle').disabled = disabled;
+  el('airbandMenuToggle').disabled = disabled;
+}
+function delay(milliseconds) {
+  return new Promise(resolve => window.setTimeout(resolve, milliseconds));
+}
+function openMenu() {
+  el('appMenu').classList.add('open');
+  el('menuBackdrop').classList.add('open');
+  el('menuToggle').setAttribute('aria-expanded', 'true');
+}
+function closeMenu() {
+  el('appMenu').classList.remove('open');
+  el('menuBackdrop').classList.remove('open');
+  el('menuToggle').setAttribute('aria-expanded', 'false');
+}
+function toggleMenu() {
+  if (el('appMenu').classList.contains('open')) closeMenu(); else openMenu();
+}
+async function readAirbandStatus() {
+  try {
+    return requireObjectResponse(await jsonRequest('/api/airband/scan/status'), 'Airband status');
+  } catch (_) {
+    return {};
+  }
+}
+async function waitForAirbandStopped(timeoutMilliseconds = 15000) {
+  const deadline = Date.now() + timeoutMilliseconds;
+  while (Date.now() < deadline) {
+    const status = await readAirbandStatus();
+    if (!status.airband_scan_running) return true;
+    updateBusy(
+      'Stopping Airband background scan…',
+      'Waiting for RTL-SDR audio receiver 00000162 to be released for NOAA Weather.'
+    );
+    await delay(250);
+  }
+  return false;
+}
+async function waitForNoaaRunning(timeoutMilliseconds = 12000) {
+  const deadline = Date.now() + timeoutMilliseconds;
+  while (Date.now() < deadline) {
+    const status = requireObjectResponse(await jsonRequest('/api/status'), 'Receiver status');
+    if (status.live_audio_running) return status;
+    updateBusy(
+      'Starting NOAA Weather audio…',
+      'The local NOAA channel has been selected. Waiting for live audio buffering to begin.'
+    );
+    await delay(250);
+  }
+  return null;
+}
+
+function updateAirbandTuningDetail(airband, noaaActive) {
+  const target = el('airbandTuningDetail');
+  if (!target) return;
+
+  target.className = '';
+  if (noaaActive) {
+    target.textContent = 'Airband Tuning: paused while NOAA is active';
+    target.className = 'tuning-paused';
+    return;
+  }
+
+  if (!airband || !airband.airband_scan_running) {
+    target.textContent = 'Airband Tuning: stopped';
+    return;
+  }
+
+  const channel = airband.airband_current_channel;
+  if (channel && Number.isFinite(Number(channel.frequency_mhz))) {
+    const description = channel.use ? ` · ${channel.use}` : '';
+    target.textContent = `Airband Tuning: ${Number(channel.frequency_mhz).toFixed(3)} MHz AM${description}`;
+    target.className = 'tuning-active';
+  } else {
+    target.textContent = 'Airband Tuning: scanning…';
+    target.className = 'tuning-active';
+  }
+}
+
+async function refreshOperationMenu() {
+  try {
+    const status = requireObjectResponse(await jsonRequest('/api/status'), 'Receiver status');
+    const airband = await readAirbandStatus();
+    const noaaBackendActive = Boolean(status.live_audio_running && status.audio_mode === 'noaa_live');
+    const noaaBrowserPlaying = Boolean(liveListening && liveAudioContext && noaaPlaybackChunksScheduled > 0);
+    const noaaActive = Boolean(noaaBackendActive || liveListening);
+    const airbandActive = Boolean(airband.airband_scan_running);
+    updateAirbandTuningDetail(airband, noaaActive);
+    syncAirbandHoldAudio(airband);
+
+    el('noaaMenuToggle').textContent = noaaBackendActive && !noaaBrowserPlaying
+      ? 'Reconnect NOAA Audio'
+      : noaaActive ? 'Stop NOAA Weather' : 'Start NOAA Weather';
+    el('noaaMenuToggle').className = noaaActive ? 'stop' : '';
+    el('airbandMenuToggle').textContent = airbandActive ? 'Stop Airband Scanner' : 'Start Airband Scanner';
+    el('airbandMenuToggle').className = airbandActive ? 'stop' : '';
+
+    if (operationTransitionActive || airband.airband_hold_active) return;
+    if (noaaBackendActive && !noaaBrowserPlaying) {
+      setMessage('operationsMessage', 'NOAA receiver is active, but browser audio is not connected. Click Reconnect NOAA Audio.', 'warning');
+    } else if (noaaActive) {
+      setMessage('operationsMessage', 'NOAA Weather listening active. Airband scanner is paused while receiver 00000162 is in use.', 'good');
+    } else if (airbandActive) {
+      const searchLabel = airband.airband_search_mode === 'fast_spectrum' ? 'Fast Spectrum Search' : 'Traditional scan';
+      setMessage('operationsMessage', `${searchLabel} running. It will open live AM audio after validated activity.`, 'warning');
+    } else {
+      setMessage('operationsMessage', 'NOAA and Airband scanner are stopped.', '');
+    }
+  } catch (error) {
+    setMessage('operationsMessage', `Operation status temporarily unavailable: ${error.message}. Retrying automatically.`, 'warning');
+  }
+}
+async function startAirbandBackground(showOverlay = true) {
+  if (!airbandBackgroundWanted || airbandRestartSuspended || liveListening) return false;
+  if (showOverlay) {
+    await showBusyAndPaint(
+      'Starting Airband Scanner…',
+      'Preparing the shared audio receiver for AM scanning and live hold audio.'
+    );
+  }
+  try {
+    const existing = await readAirbandStatus();
+    if (existing.airband_scan_running) return true;
+    const scope = el('airbandScanScope').value || 'priority';
+    const result = await jsonRequest(
+      `/api/airband/scan/activity/start?scope=${encodeURIComponent(scope)}`,
+      {method: 'POST'}
+    );
+    const modeLabel = result.airband_search_mode === 'fast_spectrum'
+      ? 'Fast Spectrum Search 120–130 MHz'
+      : `Traditional Audio Samples (${result.scan_scope || scope})`;
+    setMessage(
+      'airbandScanStatus',
+      `Scanner active: ${modeLabel}; waiting for valid AM activity.`,
+      'warning'
+    );
+    pollExperimentalScan();
+    return true;
+  } catch (error) {
+    setMessage('airbandScanStatus', `Airband scanner could not start: ${error.message}`, 'error');
+    return false;
+  } finally {
+    if (showOverlay) await hideBusyAfterMinimum(550);
+    await refreshOperationMenu();
+  }
+}
+async function stopAirbandBackground(changePreference = true, showOverlay = true) {
+  if (changePreference) airbandBackgroundWanted = false;
+  if (showOverlay) {
+    await showBusyAndPaint(
+      'Stopping Airband Scanner…',
+      'Ending scan and releasing held audio.'
+    );
+  }
+  try {
+    await jsonRequest('/api/airband/scan/activity/stop', {method: 'POST'});
+  } catch (_) {}
+  stopAirbandPlayback();
+  el('airbandSkipHeld').disabled = true;
+  el('airbandBlockHeld').disabled = true;
+  const released = await waitForAirbandStopped();
+  /* Step 71: guarantee Airband menu stop releases busy overlay */
+  if (showOverlay) await hideBusyAfterMinimum(550);
+  await refreshOperationMenu();
+  return released;
+}
+async function toggleNoaaMenuOperation() {
+  if (operationTransitionActive) return;
+  operationTransitionActive = true;
+  setOperationButtonsDisabled(true);
+
+  try {
+    if (!liveListening) await prepareNoaaAudioForStart(true);
+    const current = requireObjectResponse(await jsonRequest('/api/status'), 'Receiver status');
+    if (current.live_audio_running && current.audio_mode === 'noaa_live' && !liveListening) {
+      closeMenu();
+      await showBusyAndPaint('Reconnect NOAA Audio…', 'Attaching browser playback to the active NOAA receiver stream.');
+      await attachExistingNoaaLive(current);
+      await hideBusyAfterMinimum(550);
+      return;
+    }
+    if (current.live_audio_running || liveListening) {
+      await showBusyAndPaint('Stopping NOAA Weather…', 'Releasing the shared audio receiver.');
+      await stopLive();
+      airbandRestartSuspended = false;
+      airbandPausedForNoaa = false;
+      airbandBackgroundWanted = false;
+      await hideBusyAfterMinimum(550);
+      return;
+    }
+
+    closeMenu();
+    airbandRestartSuspended = true;
+    const airband = await readAirbandStatus();
+    airbandPausedForNoaa = airbandBackgroundWanted || Boolean(airband.airband_scan_running);
+
+    await showBusyAndPaint(
+      'Preparing NOAA Weather…',
+      'Stopping Airband background scanning before searching NOAA frequencies.'
+    );
+
+    if (airband.airband_scan_running) {
+      const released = await stopAirbandBackground(true, false);
+      if (!released) throw new Error('Airband did not release the shared receiver.');
+    }
+
+    airbandBackgroundWanted = false;
+    airbandPausedForNoaa = false;
+
+    updateBusy(
+      'Locating local NOAA Weather channel…',
+      'Fast scanning all seven NOAA carriers, then validating clear weather audio.'
+    );
+    await autoNoaa();
+
+    const started = await waitForNoaaRunning();
+    if (!started) {
+      throw new Error('NOAA live audio did not report running within 12 seconds.');
+    }
+    updateBusy(
+      'NOAA Weather listening active',
+      `Tuned to ${(Number(started.noaa_frequency_hz) / 1000000).toFixed(3)} MHz.`
+    );
+    await hideBusyAfterMinimum(550);
+  } catch (error) {
+    hideBusy();
+    airbandRestartSuspended = false;
+    airbandBackgroundWanted = false;
+    airbandPausedForNoaa = false;
+    await releaseUnusedPreparedNoaaAudio();
+    setMessage('operationsMessage', `NOAA operation failed: ${error.message}. Airband remains stopped.`, 'error');
+  } finally {
+    operationTransitionActive = false;
+    setOperationButtonsDisabled(false);
+    await refreshOperationMenu();
+  }
+}
+async function toggleAirbandMenuOperation() {
+  if (operationTransitionActive) return;
+  operationTransitionActive = true;
+  setOperationButtonsDisabled(true);
+
+  try {
+    await prepareAirbandAudio();
+    const airband = await readAirbandStatus();
+    if (airband.airband_scan_running) {
+      airbandRestartSuspended = true;
+      await stopAirbandBackground(true, true);
+      airbandRestartSuspended = false;
+      return;
+    }
+
+    closeMenu();
+    const status = requireObjectResponse(await jsonRequest('/api/status'), 'Receiver status');
+    if (status.live_audio_running || liveListening) {
+      await showBusyAndPaint('Stopping NOAA Weather…', 'Releasing the shared receiver for Airband scanning.');
+      await stopLive();
+    }
+
+    airbandBackgroundWanted = true;
+    airbandRestartSuspended = false;
+    await startAirbandBackground(true);
+  } catch (error) {
+    hideBusy();
+    setMessage('operationsMessage', `Airband operation failed: ${error.message}`, 'error');
+  } finally {
+    hideBusy(); // Step 71 safeguard: no menu operation may leave the spinner visible.
+    operationTransitionActive = false;
+    setOperationButtonsDisabled(false);
+    await refreshOperationMenu();
+  }
+}
+async function startDefaultBackgroundAirband() {
+  airbandBackgroundWanted = false;
+  airbandRestartSuspended = false;
+  await refreshOperationMenu();
+}
+
+function bindControls() {
+  el('aircraftDetailClose').addEventListener('click', closeAircraftDetails);
+  el('aircraftDetailOverlay').addEventListener('click', event => {
+    if (event.target === el('aircraftDetailOverlay')) closeAircraftDetails();
+  });
+  el('pickLocationOnMap').addEventListener('click', beginReceiverLocationPick);
+  el('cancelLocationPick').addEventListener('click', cancelReceiverLocationPick);
+  el('menuToggle').addEventListener('click', toggleMenu);
+  el('menuBackdrop').addEventListener('click', closeMenu);
+  el('noaaMenuToggle').addEventListener('click', toggleNoaaMenuOperation);
+  el('airbandMenuToggle').addEventListener('click', toggleAirbandMenuOperation);
+  el('airbandSkipHeld').addEventListener('click', skipHeldAirbandChannel);
+  el('airbandBlockHeld').addEventListener('click', blockHeldAirbandChannel);
+  el('clearAirbandBlocks').addEventListener('click', clearBlockedAirbandFrequencies);
+  el('startLive').addEventListener('click', startLive);
+  el('stopLive').addEventListener('click', stopLive);
+  el('capture10').addEventListener('click', captureNoaa);
+  el('autoNoaa').addEventListener('click', autoNoaa);
+  el('saveLocation').addEventListener('click', saveLocation);
+  el('saveAirbandRadius').addEventListener('click', saveAirbandRadius);
+  el('saveAirlabsKey').addEventListener('click', saveAirlabsKey);
+  el('clearAirlabsKey').addEventListener('click', clearAirlabsKey);
+  el('testAirlabsKey').addEventListener('click', testAirlabsKey);
+  el('clearAirlabsRouteCache').addEventListener('click', clearAirlabsRouteCache);
+  el('rescanNoaaChannel').addEventListener('click', rescanSavedNoaaChannel);
+  el('loadAirbandChannels').addEventListener('click', loadAirbandChannels);
+  el('activityScanStart').addEventListener('click', startExperimentalScan);
+  el('activityScanStop').addEventListener('click', stopExperimentalScan);
+  el('airbandTestStart').addEventListener('click', startAirbandTest);
+  el('airbandTestStop').addEventListener('click', () => airbandTestCommand('stop'));
+  el('airbandTestHold').addEventListener('click', () => airbandTestCommand('hold'));
+  el('airbandTestSkip').addEventListener('click', () => airbandTestCommand('skip'));
+  el('airbandTestResume').addEventListener('click', () => airbandTestCommand('resume'));
+  el('fitAircraftMap').addEventListener('click', fitAircraftMap);
+  el('centerReceiverMap').addEventListener('click', centerReceiverMap);
+  el('clearAircraftTrails').addEventListener('click', clearAircraftTrails);
+  el('erasePiTrails').addEventListener('click', eraseTrailHistory);
+  el('loadPiTrails').addEventListener('click', () => loadTrailHistoryFromServer(true));
+  el('trailRetention').addEventListener('change', changeTrailRetention);
+  for (const id of ['locationName', 'locationLatitude', 'locationLongitude', 'locationRadius']) {
+    el(id).addEventListener('input', () => { el('locationName').dataset.edited = 'true'; });
+  }
+}
+
+window.addEventListener('storage', event => {
+  if (event.key === TRAIL_CLEARED_AT_KEY) {
+    aircraftTrailClearedAt = Number(event.newValue || '0');
+    loadTrailHistory();
+    renderStoredTrails();
+    setMessage('mapMessage', 'Stored aircraft trails were cleared in another tracker tab.', 'good');
+  }
+});
+
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && el('aircraftDetailOverlay').classList.contains('open')) {
+    closeAircraftDetails();
+  }
+});
+
+document.addEventListener('DOMContentLoaded', () => {
+  initializeAircraftMap();
+  loadTrailHistory();
+  el('trailRetention').value = aircraftTrailDisplayMode === 'active' ? 'active' : String(aircraftTrailRetentionMinutes);
+  renderStoredTrails(new Set(aircraftMapMarkers.keys()));
+  bindControls();
+  loadAirlabsSettings();
+  loadTrailHistoryFromServer();
+  updateStatus();
+  updateAircraft();
+  window.setInterval(updateStatus, 2000);
+  window.setInterval(updateAircraft, 2000);
+  window.setInterval(refreshOperationMenu, 2500);
+  window.setTimeout(startDefaultBackgroundAirband, 900);
+});
+
+;
+
+/* Step 51: Airband sensitivity and RF gain controls */
+(() => {
+  const byId = (id) => document.getElementById(id);
+  const tuningMessage = () => byId("airbandTuningMessage");
+  const fmt = (value) => value == null ? "—" : Number(value).toFixed(1);
+
+  async function loadAirbandTuning() {
+    const response = await fetch("/api/settings/airband-scan", {cache: "no-store"});
+    if (!response.ok) throw new Error("Unable to load Airband tuning settings.");
+    const settings = await response.json();
+    byId("airbandActivityThreshold").value = String(settings.airband_activity_threshold_rms);
+    byId("airbandRfGain").value = Number(settings.airband_rf_gain_db).toFixed(1);
+    byId("airbandSearchMode").value = settings.airband_search_mode || "fast_spectrum";
+    byId("airbandSpectrumMargin").value = String(settings.airband_spectrum_margin_db == null ? 8 : settings.airband_spectrum_margin_db);
+    renderBlockedAirbandFrequencies(settings);
+    const search = settings.airband_search_mode === "fast_spectrum" ? "Fast 120–130 MHz" : "Traditional";
+    tuningMessage().textContent = `${search} · Trigger ${fmt(settings.airband_activity_threshold_rms)} RMS · Gain ${fmt(settings.airband_rf_gain_db)} dB · Carrier +${fmt(settings.airband_spectrum_margin_db)} dB.`;
+  }
+
+  async function saveAirbandTuning() {
+    const payload = {
+      airband_activity_threshold_rms: Number(byId("airbandActivityThreshold").value),
+      airband_rf_gain_db: Number(byId("airbandRfGain").value),
+      airband_search_mode: byId("airbandSearchMode").value,
+      airband_spectrum_margin_db: Number(byId("airbandSpectrumMargin").value)
+    };
+    const response = await fetch("/api/settings/airband-scan", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(payload)
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || "Unable to save Airband tuning settings.");
+    const search = result.airband_search_mode === "fast_spectrum" ? "Fast 120–130 MHz" : "Traditional";
+    tuningMessage().textContent = `Applied: ${search} · trigger ${fmt(result.airband_activity_threshold_rms)} RMS · gain ${fmt(result.airband_rf_gain_db)} dB · carrier +${fmt(result.airband_spectrum_margin_db)} dB. Restart scanner to change search mode.`;
+  }
+
+  async function refreshAirbandMeasurement() {
+    try {
+      const response = await fetch("/api/airband/scan/status", {cache: "no-store"});
+      if (!response.ok) return;
+      const status = await response.json();
+      const trigger = status.airband_activity_threshold_rms;
+      const gain = status.airband_rf_gain_db;
+      const last = status.airband_last_measurement_dbfs;
+      const best = status.airband_best_rms_sample;
+      const search = status.airband_search_mode === "fast_spectrum" ? "Fast" : "Traditional";
+      if (last != null) {
+        const hit = Number(last) >= Number(trigger) ? "HIT" : "below trigger";
+        tuningMessage().textContent = `${search} · Last ${fmt(last)} RMS / trigger ${fmt(trigger)} (${hit}) · best ${fmt(best)} · gain ${fmt(gain)} dB`;
+      } else if (status.airband_search_mode === "fast_spectrum") {
+        tuningMessage().textContent = `Fast · carrier trigger +${fmt(status.airband_spectrum_margin_db)} dB · gain ${fmt(gain)} dB · awaiting AM validation.`;
+      }
+    } catch (error) {
+      void error;
+    }
+  }
+
+  window.addEventListener("DOMContentLoaded", () => {
+    if (!byId("saveAirbandTuning")) return;
+    byId("saveAirbandTuning").addEventListener("click", async () => {
+      try { await saveAirbandTuning(); } catch (error) { tuningMessage().textContent = error.message; }
+    });
+    loadAirbandTuning().catch((error) => { tuningMessage().textContent = error.message; });
+    setInterval(refreshAirbandMeasurement, 2000);
+  });
+})();
+
+;
+
+/* Step 57: map scanner controls and Airband apply layout */
+(() => {
+  const byId = (id) => document.getElementById(id);
+  const setMapState = (value) => {
+    const target = byId("mapAirbandActionState");
+    if (target) target.textContent = value;
+  };
+  async function scannerAction(action) {
+    const response = await fetch(`/api/airband/scan/activity/${action}`, {method: "POST"});
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || `Unable to ${action} held frequency.`);
+    setMapState(action === "block" ? "Blocked; scanning resumes" : "Skipped; scanning resumes");
+  }
+  async function refreshMapScannerControls() {
+    try {
+      const response = await fetch("/api/airband/scan/status", {cache: "no-store"});
+      if (!response.ok) return;
+      const status = await response.json();
+      const holding = Boolean(status.airband_hold_active);
+      const skip = byId("mapAirbandSkipHeld");
+      const block = byId("mapAirbandBlockHeld");
+      if (skip) skip.disabled = !holding;
+      if (block) block.disabled = !holding;
+      if (holding) {
+        const channel = status.airband_hold_channel || {};
+        const mhz = Number(channel.frequency_mhz || (Number(channel.frequency_hz || 0) / 1000000)).toFixed(3);
+        setMapState(`HOLD ${mhz} MHz`);
+      } else if (status.airband_scan_running) {
+        setMapState("Scanning — controls enable on hold");
+      } else {
+        setMapState("Scanner stopped");
+      }
+    } catch (error) {
+      void error;
+    }
+  }
+  window.addEventListener("DOMContentLoaded", () => {
+    const skip = byId("mapAirbandSkipHeld");
+    const block = byId("mapAirbandBlockHeld");
+    if (!skip || !block) return;
+    skip.addEventListener("click", () => scannerAction("skip").catch((error) => setMapState(error.message)));
+    block.addEventListener("click", () => scannerAction("block").catch((error) => setMapState(error.message)));
+    refreshMapScannerControls();
+    window.setInterval(refreshMapScannerControls, 500);
+  });
+})();
+
+;
+
+/* Step 67: live Airband squelch controls below map */
+(() => {
+  const byId = (id) => document.getElementById(id);
+  function renderSquelch(status) {
+    const level = Number(status.airband_playback_squelch_rms || 0);
+    const muted = Boolean(status.airband_playback_squelch_muted);
+    const holding = Boolean(status.airband_hold_active);
+    const value = byId("mapAirbandSquelchValue");
+    if (value) {
+      value.textContent = level <= 0 ? "Off" : `${level.toFixed(0)} RMS${muted ? " mute" : ""}`;
+      value.classList.toggle("muted", muted);
+    }
+    const down = byId("mapAirbandSquelchDown");
+    const up = byId("mapAirbandSquelchUp");
+    if (down) down.disabled = !holding || level <= 0;
+    if (up) up.disabled = !holding || level >= 5000;
+  }
+  async function adjustSquelch(deltaRms) {
+    const response = await fetch("/api/settings/airband-playback-squelch", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({delta_rms: deltaRms})
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || "Unable to adjust Airband squelch.");
+    renderSquelch(result);
+  }
+  async function refreshSquelch() {
+    try {
+      const response = await fetch("/api/airband/scan/status", {cache: "no-store"});
+      if (!response.ok) return;
+      renderSquelch(await response.json());
+    } catch (error) {
+      void error;
+    }
+  }
+  window.addEventListener("DOMContentLoaded", () => {
+    const down = byId("mapAirbandSquelchDown");
+    const up = byId("mapAirbandSquelchUp");
+    if (!down || !up) return;
+    down.addEventListener("click", () => adjustSquelch(-100).catch(() => {}));
+    up.addEventListener("click", () => adjustSquelch(100).catch(() => {}));
+    refreshSquelch();
+    window.setInterval(refreshSquelch, 450);
+  });
+})();
+
+;
+
+/* Step 80: NOAA browser diagnostic trace recorder */
+(() => {
+  const KEY = 'rtl.adsb.noaa.debug.trace.v1';
+  const MAX = 1200;
+  let enabled = false, events = [], seq = 0, chunkSeq = 0, lastState = '';
+  let watchedMedia = null;
+  const watchedContexts = new WeakSet();
+  const originalFetch = window.fetch.bind(window);
+  const at = () => new Date().toISOString();
+  const get = id => document.getElementById(id);
+  const cleanError = e => e ? {name:String(e.name || 'Error'), message:String(e.message || e), stack:String(e.stack || '').slice(0,800)} : null;
+  function cloneSafe(value) { try { return JSON.parse(JSON.stringify(value)); } catch (_) { return String(value); } }
+  function displayState() {
+    const node = get('noaaDebugState');
+    if (!node) return;
+    node.textContent = enabled ? `Recording · ${events.length} events` : `${events.length} events saved`;
+    node.classList.toggle('recording', enabled);
+  }
+  function save() { try { localStorage.setItem(KEY, JSON.stringify(events)); } catch (_) {} }
+  function log(type, data = {}) {
+    if (!enabled && type !== 'trace.begin') return;
+    events.push({seq: ++seq, at: at(), type, data: cloneSafe(data)});
+    if (events.length > MAX) events.splice(0, events.length - MAX);
+    save(); displayState();
+    console.debug('[NOAA TRACE]', type, data);
+  }
+  function contextState(ctx) {
+    return ctx ? {state:ctx.state, time:Number(ctx.currentTime || 0).toFixed(3), sampleRate:ctx.sampleRate} : null;
+  }
+  function mediaState(media) {
+    return media ? {paused:media.paused, ended:media.ended, muted:media.muted, volume:media.volume, currentTime:Number(media.currentTime || 0).toFixed(3), readyState:media.readyState, networkState:media.networkState, error:media.error ? media.error.code : null} : null;
+  }
+  function watchRuntimeObjects() {
+    let media = null, liveCtx = null, airCtx = null;
+    try {
+      media = typeof noaaHtmlAudioElement === 'undefined' ? null : noaaHtmlAudioElement;
+      liveCtx = typeof liveAudioContext === 'undefined' ? null : liveAudioContext;
+      airCtx = typeof airbandAudioContext === 'undefined' ? null : airbandAudioContext;
+    } catch (_) {}
+    if (media && media !== watchedMedia) {
+      watchedMedia = media;
+      log('media.attach', mediaState(media));
+      ['loadstart','loadeddata','canplay','play','playing','pause','waiting','stalled','ended','emptied','error','volumechange'].forEach(name => {
+        media.addEventListener(name, () => log(`media.${name}`, mediaState(media)));
+      });
+    }
+    [['live', liveCtx], ['airband', airCtx]].forEach(([label, ctx]) => {
+      if (!ctx || watchedContexts.has(ctx)) return;
+      watchedContexts.add(ctx);
+      log('context.attach', {label, ...contextState(ctx)});
+      ctx.addEventListener('statechange', () => log('context.statechange', {label, ...contextState(ctx)}));
+    });
+  }
+  function snapshot(reason) {
+    if (!enabled) return;
+    const state = {reason};
+    try {
+      state.liveListening = typeof liveListening === 'undefined' ? 'missing' : Boolean(liveListening);
+      state.liveNextCursor = typeof liveNextCursor === 'undefined' ? 'missing' : liveNextCursor;
+      state.liveNextPlayTime = typeof liveNextPlayTime === 'undefined' ? 'missing' : liveNextPlayTime;
+      state.chunksScheduled = typeof noaaPlaybackChunksScheduled === 'undefined' ? 'missing' : noaaPlaybackChunksScheduled;
+      state.lastChunkRms = typeof noaaPlaybackLastChunkRms === 'undefined' ? 'missing' : noaaPlaybackLastChunkRms;
+      state.usesAirbandContext = typeof noaaAudioUsesAirbandContext === 'undefined' ? 'missing' : Boolean(noaaAudioUsesAirbandContext);
+      state.liveContext = contextState(typeof liveAudioContext === 'undefined' ? null : liveAudioContext);
+      state.airbandContext = contextState(typeof airbandAudioContext === 'undefined' ? null : airbandAudioContext);
+      state.htmlPlayer = mediaState(typeof noaaHtmlAudioElement === 'undefined' ? null : noaaHtmlAudioElement);
+      state.htmlQueueLength = typeof noaaHtmlAudioQueue === 'undefined' ? 'missing' : noaaHtmlAudioQueue.length;
+    } catch (error) { state.error = cleanError(error); }
+    const encoded = JSON.stringify(state);
+    if (encoded !== lastState) { lastState = encoded; log('app.state', state); }
+    watchRuntimeObjects();
+  }
+  function wavSample(buffer) {
+    if (!buffer || buffer.byteLength < 46) return {bytes:buffer ? buffer.byteLength : 0};
+    try {
+      const view = new DataView(buffer);
+      let sum = 0, count = 0, peak = 0;
+      for (let offset = 44; offset + 1 < buffer.byteLength; offset += 16) {
+        const value = view.getInt16(offset, true);
+        sum += value * value; peak = Math.max(peak, Math.abs(value)); count += 1;
+      }
+      return {bytes:buffer.byteLength, sampledRms:count ? Math.sqrt(sum / count).toFixed(2) : '0', sampledPeak:peak};
+    } catch (error) { return {bytes:buffer.byteLength, error:String(error.message || error)}; }
+  }
+  function statusSubset(path, value) {
+    if (!value || typeof value !== 'object') return value;
+    if (path === '/api/status') return {audio_mode:value.audio_mode, live_audio_running:value.live_audio_running, noaa_frequency_hz:value.noaa_frequency_hz, noaa_station:value.noaa_station, audio_busy:value.audio_busy, noaa_live_active:value.noaa_live_active};
+    return value;
+  }
+  window.fetch = async function(resource, options) {
+    const raw = typeof resource === 'string' ? resource : (resource && resource.url ? resource.url : String(resource));
+    let u;
+    try { u = new URL(raw, location.href); } catch (_) { return originalFetch(resource, options); }
+    const path = u.pathname;
+    const interesting = path === '/api/status' || path.startsWith('/api/noaa/') || path.startsWith('/api/airband/scan/');
+    if (!enabled || !interesting) return originalFetch(resource, options);
+    const method = String((options && options.method) || (resource && resource.method) || 'GET').toUpperCase();
+    const begun = performance.now();
+    log('fetch.begin', {method, path, query:u.search});
+    try {
+      const response = await originalFetch(resource, options);
+      const meta = {method, path, status:response.status, elapsedMs:Math.round(performance.now() - begun)};
+      if (path === '/api/noaa/live/audio.wav') {
+        const index = ++chunkSeq;
+        response.clone().arrayBuffer().then(data => log('fetch.noaaAudioChunk', {...meta, chunk:index, sourceSamples:response.headers.get('X-Source-Samples'), ...wavSample(data)}))
+          .catch(error => log('fetch.noaaAudioChunk.error', {...meta, error:cleanError(error)}));
+      } else {
+        response.clone().json().then(data => log('fetch.response', {...meta, response:statusSubset(path, data)}))
+          .catch(error => log('fetch.response.nonJson', {...meta, error:cleanError(error)}));
+      }
+      return response;
+    } catch (error) {
+      log('fetch.error', {method, path, elapsedMs:Math.round(performance.now() - begun), error:cleanError(error)});
+      throw error;
+    }
+  };
+  function observeBufferScheduling() {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx || !Ctx.prototype || Ctx.prototype.__noaaTraceOriginalCreate) return;
+    const originalCreate = Ctx.prototype.createBufferSource;
+    Ctx.prototype.__noaaTraceOriginalCreate = originalCreate;
+    Ctx.prototype.createBufferSource = function(...args) {
+      const ctx = this;
+      const source = originalCreate.apply(ctx, args);
+      const originalStart = source.start.bind(source);
+      source.start = function(when, ...remaining) {
+        if (enabled) log('webaudio.buffer.start', {context:contextState(ctx), scheduledAt:typeof when === 'number' ? Number(when).toFixed(3) : 'immediate', duration:source.buffer ? Number(source.buffer.duration).toFixed(3) : null});
+        return originalStart(when, ...remaining);
+      };
+      return source;
+    };
+  }
+  /* Step 82: locate Diagnostics host for NOAA trace controls */
+  function findNoaaDiagnosticsHost(anchor) {
+    const preferredIds = [
+      'diagnosticsContent', 'diagnosticsPanel', 'diagnosticPanel',
+      'diagnosticsSection', 'diagnostics', 'diagnosticContent'
+    ];
+    for (const id of preferredIds) {
+      const candidate = get(id);
+      if (candidate) return candidate;
+    }
+
+    const labels = Array.from(document.querySelectorAll(
+      'summary, legend, h1, h2, h3, h4, .section-title, .menu-title, .panel-title, .card-title'
+    ));
+    for (const label of labels) {
+      const value = String(label.textContent || '').trim();
+      if (!/^diagnostics?(?:\s|$)/i.test(value)) continue;
+      const details = label.closest('details');
+      if (details) return details;
+      const container = label.closest(
+        'fieldset, section, .config-section, .menu-section, .settings-section, .panel, .card'
+      );
+      if (container) return container;
+      if (label.parentElement) return label.parentElement;
+    }
+
+    const menu = anchor.closest(
+      'details, .config-panel, .operations-panel, .menu-panel, .settings-panel'
+    ) || anchor.parentElement || document.body;
+    let fallback = get('noaaDiagnosticsFallback');
+    if (!fallback) {
+      fallback = document.createElement('details');
+      fallback.id = 'noaaDiagnosticsFallback';
+      fallback.className = 'menu-section';
+      fallback.innerHTML = '<summary>Diagnostics</summary>';
+      menu.appendChild(fallback);
+    }
+    return fallback;
+  }
+
+  function installControls() {
+    const anchor = get('noaaMenuToggle');
+    if (!anchor || get('noaaDebugTools')) return;
+    const tools = document.createElement('div');
+    tools.id = 'noaaDebugTools';
+    tools.className = 'noaa-debug-tools';
+    tools.innerHTML = '<button type="button" id="noaaDebugBegin">Begin NOAA Trace</button><button type="button" id="noaaDebugDownload">Download Log</button><button type="button" id="noaaDebugClear">Clear</button><span id="noaaDebugState" class="noaa-debug-state">0 events saved</span>';
+    findNoaaDiagnosticsHost(anchor).appendChild(tools);
+    get('noaaDebugBegin').addEventListener('click', () => {
+      events = []; seq = 0; chunkSeq = 0; lastState = ''; enabled = true;
+      log('trace.begin', {userAgent:navigator.userAgent, location:location.href});
+      snapshot('begin');
+    });
+    get('noaaDebugClear').addEventListener('click', () => {
+      enabled = false; events = []; seq = 0; chunkSeq = 0; lastState = '';
+      try { localStorage.removeItem(KEY); } catch (_) {}
+      displayState();
+    });
+    get('noaaDebugDownload').addEventListener('click', () => {
+      snapshot('download');
+      const blob = new Blob([JSON.stringify({generatedAt:at(), eventCount:events.length, note:'Browser NOAA playback trace only; no keys intentionally recorded.', events}, null, 2)], {type:'application/json'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `RTL-ADS-B-Tracker_NOAA_Browser_Trace_${at().replace(/[:.]/g, '-')}.json`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    });
+    displayState();
+  }
+  function initialize() {
+    installControls();
+    observeBufferScheduling();
+    try {
+      const stored = localStorage.getItem(KEY);
+      if (stored) events = JSON.parse(stored) || [];
+      seq = events.reduce((n, item) => Math.max(n, Number(item.seq || 0)), 0);
+    } catch (_) {}
+    displayState();
+    document.addEventListener('click', event => {
+      if (!enabled) return;
+      const button = event.target && event.target.closest ? event.target.closest('button') : null;
+      if (!button) return;
+      const label = String(button.textContent || '').trim();
+      if (/NOAA|Airband|Reconnect|Scanner|Stop/i.test(label)) log('ui.button', {id:button.id || null, label});
+    }, true);
+    window.addEventListener('error', event => log('window.error', {message:event.message, source:event.filename, line:event.lineno}));
+    window.addEventListener('unhandledrejection', event => log('window.unhandledrejection', {error:cleanError(event.reason)}));
+    setInterval(() => snapshot('interval'), 400);
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initialize);
+  else initialize();
+})();
+
+;
+
+/* Step 81: start NOAA chunk pump when live state has no first request */
+(() => {
+  let activeSinceMs = 0;
+  let lastKickMs = 0;
+  let kickInFlight = false;
+  let reportedKick = false;
+
+  function noaaLiveNeedsFirstChunk() {
+    try {
+      return typeof liveListening !== 'undefined' && liveListening === true &&
+        typeof liveAudioContext !== 'undefined' && Boolean(liveAudioContext) &&
+        typeof noaaPlaybackChunksScheduled !== 'undefined' && Number(noaaPlaybackChunksScheduled) === 0 &&
+        typeof liveNextCursor !== 'undefined' && Number(liveNextCursor) === 0;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  async function startMissingNoaaPump() {
+    if (kickInFlight || !noaaLiveNeedsFirstChunk()) return;
+    kickInFlight = true;
+    lastKickMs = performance.now();
+    try {
+      // The existing stream scheduler handles fetch, decode, queue depth and
+      // all subsequent polling. This call only starts its missing first cycle.
+      if (typeof liveNextPlayTime !== 'undefined' && liveAudioContext) {
+        liveNextPlayTime = liveAudioContext.currentTime + 0.06;
+      }
+      if (!reportedKick && typeof setMessage === 'function') {
+        setMessage('audioMessage', 'NOAA stream is live; starting browser audio feed…', '');
+        reportedKick = true;
+      }
+      await pumpLiveAudio();
+    } catch (error) {
+      console.error('NOAA playback bootstrap failed', error);
+      if (typeof setMessage === 'function') {
+        setMessage('audioMessage', `NOAA playback bootstrap failed: ${error.message || error}`, 'error');
+      }
+    } finally {
+      kickInFlight = false;
+    }
+  }
+
+  window.setInterval(() => {
+    if (!noaaLiveNeedsFirstChunk()) {
+      activeSinceMs = 0;
+      lastKickMs = 0;
+      reportedKick = false;
+      return;
+    }
+    const now = performance.now();
+    if (!activeSinceMs) activeSinceMs = now;
+    // Normal startup gets a brief opportunity to start its own first chunk.
+    // Intervention occurs only for the traced stall condition.
+    if (now - activeSinceMs >= 750 && (!lastKickMs || now - lastKickMs >= 1000)) {
+      startMissingNoaaPump();
+    }
+  }, 125);
+})();
+
+;
+
+/* Step 83: saved NOAA channel reused until location change or manual rescan */
+
+
+// Aircraft marker double-click capture hardening for app.js.
+// Leaflet can replace marker DOM icons during marker updates, so this stamps
+// and rebinds marker icons each update and disables map double-click zoom.
+function rtpV34DisableMapDoubleClickZoom(){
+  try{
+    const dz=state&&state.map&&state.map.doubleClickZoom;
+    if(dz&&typeof dz.disable==="function")dz.disable();
+  }catch(_e){}
+}
+function rtpV34EventPath(event){
+  try{if(event&&typeof event.composedPath==="function")return event.composedPath();}catch(_e){}
+  const path=[];
+  let node=event&&event.target;
+  while(node){path.push(node);node=node.parentNode;}
+  return path;
+}
+function rtpV34MarkerFromDblclickEvent(event){
+  const path=rtpV34EventPath(event);
+  for(const node of path){
+    if(!node)continue;
+    if(node.__rtpV34AircraftMarker)return node.__rtpV34AircraftMarker;
+    if(node.__rtpV33AircraftMarker)return node.__rtpV33AircraftMarker;
+    const hex=(node.dataset&&(node.dataset.aircraftHex||node.dataset.hex||node.dataset.icao))||node.getAttribute?.("data-aircraft-hex")||node.getAttribute?.("data-hex")||node.getAttribute?.("data-icao");
+    if(hex&&state&&state.markers){
+      const h=String(hex).toUpperCase();
+      const marker=state.markers.get(h)||state.markers.get(h.toLowerCase())||state.markers.get(String(hex));
+      if(marker)return marker;
+    }
+  }
+  return null;
+}
+function rtpV34StopDblclick(event){
+  try{if(event&&typeof L!=="undefined"&&L.DomEvent)L.DomEvent.stop(event);}catch(_e){}
+  try{if(event&&event.originalEvent&&typeof L!=="undefined"&&L.DomEvent)L.DomEvent.stop(event.originalEvent);}catch(_e){}
+  const original=(event&&event.originalEvent)||event;
+  try{if(original&&original.preventDefault)original.preventDefault();}catch(_e){}
+  try{if(original&&original.stopPropagation)original.stopPropagation();}catch(_e){}
+  try{if(original&&original.stopImmediatePropagation)original.stopImmediatePropagation();}catch(_e){}
+  return false;
+}
+function rtpV34OpenAircraftFromMarker(marker,event){
+  rtpV34StopDblclick(event);
+  rtpV34DisableMapDoubleClickZoom();
+  if(!marker)return false;
+  const hex=marker.__rtpV34AircraftHex||marker.__rtpV33AircraftHex;
+  const record=marker.__rtpV34AircraftRecord||marker.__rtpV33AircraftRecord||((state.rows&&hex)?state.rows.get(hex):null);
+  try{
+    if(typeof rtpV33OpenAircraftDetailsFromMap==="function"){
+      rtpV33OpenAircraftDetailsFromMap(hex,record,event);
+      return false;
+    }
+  }catch(_e){}
+  try{if(hex&&typeof selectAircraft==="function")selectAircraft(hex);}catch(_e){}
+  try{if(typeof renderSelected==="function")renderSelected();}catch(_e){}
+  return false;
+}
+function rtpV34BindAircraftMarkerDblclick(marker,hex,a){
+  rtpV34DisableMapDoubleClickZoom();
+  if(!marker)return marker;
+  marker.__rtpV34AircraftHex=hex;
+  marker.__rtpV34AircraftRecord=a;
+  marker.__rtpV33AircraftHex=hex;
+  marker.__rtpV33AircraftRecord=a;
+  try{
+    if(typeof marker.off==="function")marker.off("dblclick");
+    if(typeof marker.on==="function")marker.on("dblclick",event=>rtpV34OpenAircraftFromMarker(marker,event));
+  }catch(_e){}
+  const iconEl=marker._icon;
+  if(iconEl){
+    iconEl.__rtpV34AircraftMarker=marker;
+    iconEl.__rtpV33AircraftMarker=marker;
+    try{iconEl.dataset.aircraftHex=String(hex||"");}catch(_e){}
+    try{iconEl.setAttribute("data-aircraft-hex",String(hex||""));}catch(_e){}
+    try{iconEl.classList.add("rtp-aircraft-marker");}catch(_e){}
+    try{if(typeof L!=="undefined"&&L.DomEvent)L.DomEvent.disableClickPropagation(iconEl);}catch(_e){}
+    try{if(typeof L!=="undefined"&&L.DomEvent)L.DomEvent.disableScrollPropagation(iconEl);}catch(_e){}
+    if(!iconEl.__rtpV34AircraftDblclickBound){
+      iconEl.__rtpV34AircraftDblclickBound=true;
+      iconEl.addEventListener("dblclick",event=>rtpV34OpenAircraftFromMarker(marker,event),true);
+      iconEl.addEventListener("mousedown",event=>{
+        if(event&&event.detail>=2)rtpV34StopDblclick(event);
+      },true);
+    }
+  }
+  try{
+    window.__rtpV34DblclickStatus={
+      installed:true,
+      lastBindHex:hex,
+      markerCount:state&&state.markers?state.markers.size:null,
+      doubleClickZoomEnabled:state&&state.map&&state.map.doubleClickZoom&&typeof state.map.doubleClickZoom.enabled==="function"?state.map.doubleClickZoom.enabled():null
+    };
+  }catch(_e){}
+  return marker;
+}
+function rtpV34InstallAircraftMapDblclickCapture(){
+  rtpV34DisableMapDoubleClickZoom();
+  try{
+    const container=state&&state.map&&typeof state.map.getContainer==="function"?state.map.getContainer():null;
+    if(container&&!container.__rtpV34AircraftDblclickCaptureBound){
+      container.__rtpV34AircraftDblclickCaptureBound=true;
+      container.addEventListener("dblclick",event=>{
+        const marker=rtpV34MarkerFromDblclickEvent(event);
+        if(marker)return rtpV34OpenAircraftFromMarker(marker,event);
+        rtpV34StopDblclick(event);
+        return false;
+      },true);
+    }
+  }catch(_e){}
+  try{
+    window.__rtpV34DblclickStatus={
+      installed:true,
+      markerCount:state&&state.markers?state.markers.size:null,
+      doubleClickZoomEnabled:state&&state.map&&state.map.doubleClickZoom&&typeof state.map.doubleClickZoom.enabled==="function"?state.map.doubleClickZoom.enabled():null
+    };
+  }catch(_e){}
+}
+try{document.addEventListener("DOMContentLoaded",()=>setTimeout(rtpV34InstallAircraftMapDblclickCapture,250));}catch(_e){}
+

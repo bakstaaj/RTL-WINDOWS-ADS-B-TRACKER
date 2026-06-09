@@ -232,7 +232,20 @@ class DecoderManager:
         )
 
     def is_running(self) -> bool:
-        return self.process is not None and self.process.poll() is None
+        # Return True when the tracked child is alive or its HTTP JSON endpoint is alive.
+        #
+        # The Windows service can leave Dump1090 serving on the configured HTTP port
+        # even when the Python Popen tracking state is stale or has been disrupted by
+        # service restarts. The UI should treat the decoder as available when the
+        # configured /data/aircraft.json endpoint is responding with valid JSON.
+        if self.process is not None and self.process.poll() is None:
+            return True
+        try:
+            with urlopen(self.decoder_json_url, timeout=0.75) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            return isinstance(payload, dict) and isinstance(payload.get("aircraft"), list)
+        except Exception:
+            return False
 
     def query_aircraft(self, timeout: float = 1.5) -> dict[str, Any]:
         with urlopen(self.decoder_json_url, timeout=timeout) as response:
