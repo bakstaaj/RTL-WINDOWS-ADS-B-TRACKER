@@ -1,5 +1,80 @@
 # RTL-Windows-ADS-B-Tracker
 
+<!-- RTL_WINDOWS_V1_2_0_START -->
+## Current Release: v1.2.0
+
+Version 1.2.0 is the current Windows service deployment baseline for the RTL ADS-B Tracker. This release focuses on making the Windows application behave like the working Raspberry Pi tracker while preserving the Windows service packaging model.
+
+### Functional Updates in v1.2.0
+
+- **Aircraft map marker double-click details**  
+  Double-clicking an aircraft marker on the map now opens the same aircraft details workflow used by the aircraft list. The implementation reuses the existing list click behavior instead of maintaining a separate details dialog path.
+
+- **Normal marker single-click behavior preserved**  
+  Single-clicking an aircraft marker still opens the normal Leaflet marker popup with quick aircraft information.
+
+- **Double-click zoom suppression for aircraft markers**  
+  Double-clicking an aircraft marker no longer zooms the map. The handler detects the active `#aircraftMap` container, stops the Leaflet double-click zoom event, extracts the visible aircraft marker token, and dispatches the matching aircraft list click.
+
+- **UI asset refactor**  
+  The active web UI has been split out of inline `index.html` blocks into:
+  - `web/index.html`
+  - `web/app.css`
+  - `web/app.js`
+
+  This makes future UI patches safer and easier to review.
+
+- **Backend static asset support**  
+  The backend now serves `/app.css` and `/app.js` so the refactored browser UI loads correctly from the Windows service backend.
+
+- **ADS-B decoder runtime fallback**  
+  The backend has improved ADS-B decoder tracking. If Dump1090 is already running and serving aircraft JSON, the backend treats it as available instead of reporting a stale process-tracking failure.
+
+### Deployment Package
+
+The v1.2.0 Windows service package is built under:
+
+```text
+runtime/build/windows-service/RTL-ADS-B-Tracker-Windows-Service-v1.2.0/
+runtime/build/windows-service/RTL-ADS-B-Tracker-Windows-Service-v1.2.0.zip
+```
+
+The package includes:
+
+```text
+RTLADSBTrackerService.exe
+RTLADSBTrackerService.xml
+install_service.cmd
+restart_service.cmd
+app/backend/RTLADSBTrackerBackend.exe
+web/index.html
+web/app.css
+web/app.js
+dist/third_party/dump1090/dump1090.exe
+dist/third_party/dump1090/dump1090.cfg
+```
+
+### Build Notes
+
+The Windows deployment build requires PyInstaller in the MSYS2 UCRT64 environment:
+
+```bash
+pacman -S --needed mingw-w64-ucrt-x86_64-pyinstaller
+python3 -m PyInstaller --version
+```
+
+Then build the deployment package from the repository root using the project packaging workflow. The generated runtime package and zip are release artifacts and should not be committed to the source repository unless intentionally publishing binaries through GitHub Releases.
+
+### User Interface Notes
+
+- Open the UI at `http://localhost:8090` for the installed service.
+- Use `http://localhost:8091` for local development runs when avoiding a conflict with the installed service.
+- The aircraft list and map use the same details workflow.
+- Single-click an aircraft marker for the marker popup.
+- Double-click an aircraft marker for the full details dialog.
+- Use **Restore History** to reload recent aircraft trail history.
+<!-- RTL_WINDOWS_V1_2_0_END -->
+
 A Windows-native dual RTL-SDR aircraft tracking and VHF audio application. The project runs a local ADS-B tracker, browser map UI, NOAA Weather Radio listener, civil airband listener/scanner, aircraft enrichment lookups, and optional Windows Service packaging for unattended startup.
 
 This application was developed as a Windows port and enhancement path for the earlier Raspberry Pi ADS-B tracker work. It is not a direct source-code fork of the Pi project; it uses the same operational ideas with a Windows-focused device, service, and packaging model.
