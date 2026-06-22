@@ -317,3 +317,98 @@ body { padding: 0; }
 .noaa-debug-tools button { padding:3px 7px; font-size:11px; }
 .noaa-debug-state { color:#c9d8e8; min-width:112px; }
 .noaa-debug-state.recording { color:#ffca4b; font-weight:700; }
+
+/* BEGIN Phase 1 weather radar overlay controls */
+.map-weather-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(8, 16, 29, .82);
+}
+
+.map-weather-controls label {
+  margin: 0;
+}
+
+.map-weather-toggle {
+  font-weight: 600;
+}
+
+.map-weather-toggle input {
+  width: auto;
+  margin: 0 4px 0 0;
+  vertical-align: middle;
+}
+
+.map-weather-opacity {
+  display: flex !important;
+  align-items: center;
+  gap: 5px !important;
+  white-space: nowrap;
+}
+
+.map-weather-opacity input[type="range"] {
+  width: 86px;
+  margin: 0;
+  padding: 0;
+}
+
+#weatherRadarOpacityValue {
+  min-width: 34px;
+  color: var(--muted);
+  font-size: 10px;
+  text-align: right;
+}
+
+#weatherRadarRefresh {
+  padding: 4px 7px;
+  min-height: 24px;
+  font-size: 10px;
+}
+/* END Phase 1 weather radar overlay controls */
+
+/* Phase 1 weather radar map overlay controls V2 */
+.map-weather-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(8, 16, 29, .82);
+}
+.map-weather-controls label { margin: 0; }
+.map-weather-toggle { font-weight: 600; }
+.map-weather-toggle input {
+  width: auto;
+  margin: 0 4px 0 0;
+  vertical-align: middle;
+}
+.map-weather-opacity {
+  display: flex !important;
+  align-items: center;
+  gap: 5px !important;
+  white-space: nowrap;
+}
+.map-weather-opacity input[type="range"] {
+  width: 86px;
+  margin: 0;
+  padding: 0;
+}
+#weatherRadarOpacityValue {
+  min-width: 34px;
+  color: var(--muted);
+  font-size: 10px;
+  text-align: right;
+}
+#weatherRadarRefresh {
+  padding: 4px 7px;
+  min-height: 24px;
+  font-size: 10px;
+}
+

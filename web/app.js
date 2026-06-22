@@ -3210,3 +3210,385 @@ function rtpV34InstallAircraftMapDblclickCapture(){
 }
 try{document.addEventListener("DOMContentLoaded",()=>setTimeout(rtpV34InstallAircraftMapDblclickCapture,250));}catch(_e){}
 
+/* BEGIN Phase 1 weather radar overlay */
+(() => {
+  if (window.__rtlAdsbWeatherRadarPhase1Installed) return;
+  window.__rtlAdsbWeatherRadarPhase1Installed = true;
+
+  const ENABLED_KEY = 'rtlAdsbWeatherRadarEnabledV1';
+  const OPACITY_KEY = 'rtlAdsbWeatherRadarOpacityV1';
+  const REFRESH_MS = 5 * 60 * 1000;
+  const MIN_OPACITY = 15;
+  const MAX_OPACITY = 85;
+
+  let radarLayer = null;
+  let refreshTimer = null;
+  let installedControls = false;
+  let opacity = Number(localStorage.getItem(OPACITY_KEY) || '45');
+  if (!Number.isFinite(opacity) || opacity < MIN_OPACITY || opacity > MAX_OPACITY) opacity = 45;
+
+  function node(id) {
+    return document.getElementById(id);
+  }
+
+  function announce(message, kind) {
+    try {
+      if (typeof setMessage === 'function') {
+        setMessage('mapMessage', message, kind || '');
+        return;
+      }
+    } catch (_) {}
+    const target = node('mapMessage');
+    if (target) target.textContent = message;
+  }
+
+  function mapReady() {
+    try {
+      return typeof L !== 'undefined' && typeof aircraftMap !== 'undefined' && aircraftMap;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function tileUrl() {
+    const bucket = Math.floor(Date.now() / REFRESH_MS);
+    return `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q/{z}/{x}/{y}.png?rtp=${bucket}`;
+  }
+
+  function ensurePane() {
+    if (!mapReady() || !aircraftMap.createPane) return;
+    if (!aircraftMap.getPane('weatherRadarPane')) {
+      const pane = aircraftMap.createPane('weatherRadarPane');
+      pane.style.zIndex = '350';
+      pane.style.pointerEvents = 'none';
+    }
+  }
+
+  function createLayer() {
+    ensurePane();
+    return L.tileLayer(tileUrl(), {
+      pane: 'weatherRadarPane',
+      opacity: opacity / 100,
+      maxZoom: 19,
+      crossOrigin: true,
+      attribution: 'Radar: Iowa State IEM / NEXRAD'
+    });
+  }
+
+  function refreshLayer() {
+    if (!radarLayer) return;
+    radarLayer.setUrl(tileUrl());
+    try { radarLayer.redraw(); } catch (_) {}
+  }
+
+  function stopTimer() {
+    if (refreshTimer) {
+      window.clearInterval(refreshTimer);
+      refreshTimer = null;
+    }
+  }
+
+  function startTimer() {
+    stopTimer();
+    refreshTimer = window.setInterval(refreshLayer, REFRESH_MS);
+  }
+
+  function controlsEnabled() {
+    return localStorage.getItem(ENABLED_KEY) === '1';
+  }
+
+  function updateControls() {
+    const toggle = node('weatherRadarToggle');
+    const slider = node('weatherRadarOpacity');
+    const value = node('weatherRadarOpacityValue');
+    if (toggle) toggle.checked = controlsEnabled();
+    if (slider) slider.value = String(opacity);
+    if (value) value.textContent = `${opacity}%`;
+  }
+
+  function setEnabled(enabled, announceChange = true) {
+    if (!mapReady()) return;
+    const active = Boolean(enabled);
+    localStorage.setItem(ENABLED_KEY, active ? '1' : '0');
+
+    if (active) {
+      if (!radarLayer) radarLayer = createLayer();
+      if (!aircraftMap.hasLayer(radarLayer)) radarLayer.addTo(aircraftMap);
+      radarLayer.setOpacity(opacity / 100);
+      refreshLayer();
+      startTimer();
+      if (announceChange) announce('Weather radar overlay enabled. Aircraft markers and trails remain above radar.', 'good');
+    } else {
+      stopTimer();
+      if (radarLayer && aircraftMap.hasLayer(radarLayer)) aircraftMap.removeLayer(radarLayer);
+      if (announceChange) announce('Weather radar overlay disabled.', '');
+    }
+
+    updateControls();
+  }
+
+  function setOpacity(value) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return;
+    opacity = Math.max(MIN_OPACITY, Math.min(MAX_OPACITY, Math.round(parsed)));
+    localStorage.setItem(OPACITY_KEY, String(opacity));
+    if (radarLayer) radarLayer.setOpacity(opacity / 100);
+    updateControls();
+  }
+
+  function installControls() {
+    if (installedControls || !mapReady()) return true;
+    const toolbar = document.querySelector('.map-toolbar');
+    if (!toolbar) return false;
+    if (node('weatherRadarControls')) {
+      installedControls = true;
+      return true;
+    }
+
+    const controls = document.createElement('div');
+    controls.id = 'weatherRadarControls';
+    controls.className = 'map-weather-controls';
+    controls.innerHTML = [
+      '<label class="map-weather-toggle" title="Overlay current NEXRAD base reflectivity radar">',
+      '<input id="weatherRadarToggle" type="checkbox"> Radar',
+      '</label>',
+      '<label class="map-weather-opacity" title="Weather radar overlay opacity">',
+      '<span>Opacity</span>',
+      `<input id="weatherRadarOpacity" type="range" min="${MIN_OPACITY}" max="${MAX_OPACITY}" step="5" value="${opacity}">`,
+      `<span id="weatherRadarOpacityValue">${opacity}%</span>`,
+      '</label>',
+      '<button id="weatherRadarRefresh" type="button" title="Refresh radar tiles now">Refresh Radar</button>'
+    ].join('');
+
+    const message = node('mapMessage');
+    if (message && message.parentElement === toolbar) toolbar.insertBefore(controls, message);
+    else toolbar.appendChild(controls);
+
+    const toggle = node('weatherRadarToggle');
+    const slider = node('weatherRadarOpacity');
+    const refresh = node('weatherRadarRefresh');
+
+    if (toggle) toggle.addEventListener('change', () => setEnabled(toggle.checked));
+    if (slider) slider.addEventListener('input', () => setOpacity(slider.value));
+    if (refresh) refresh.addEventListener('click', () => {
+      refreshLayer();
+      announce('Weather radar overlay refreshed.', 'good');
+    });
+
+    installedControls = true;
+    updateControls();
+    if (controlsEnabled()) setEnabled(true, false);
+    return true;
+  }
+
+  function bootstrap() {
+    if (installControls()) return;
+    let attempts = 0;
+    const timer = window.setInterval(() => {
+      attempts += 1;
+      if (installControls() || attempts > 80) window.clearInterval(timer);
+    }, 250);
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bootstrap);
+  else bootstrap();
+})();
+/* END Phase 1 weather radar overlay */
+
+/* RTP_WEATHER_RADAR_PHASE1_V2: current NEXRAD radar overlay for the aircraft map. */
+(() => {
+  'use strict';
+  if (window.__rtpWeatherRadarPhase1V2Installed) return;
+  window.__rtpWeatherRadarPhase1V2Installed = true;
+
+  const ENABLED_KEY = 'rtlAdsbWeatherRadarEnabledV1';
+  const OPACITY_KEY = 'rtlAdsbWeatherRadarOpacityV1';
+  const REFRESH_MS = 5 * 60 * 1000;
+  const MIN_OPACITY = 15;
+  const MAX_OPACITY = 85;
+  const DEFAULT_OPACITY = 45;
+  let radarLayer = null;
+  let refreshTimer = null;
+  let installedControls = false;
+
+  function getElement(id) {
+    try { return document.getElementById(id); } catch (_) { return null; }
+  }
+
+  function getMap() {
+    try {
+      if (typeof aircraftMap !== 'undefined' && aircraftMap) return aircraftMap;
+    } catch (_) {}
+    return null;
+  }
+
+  function currentOpacity() {
+    const stored = Number(localStorage.getItem(OPACITY_KEY) || DEFAULT_OPACITY);
+    if (!Number.isFinite(stored)) return DEFAULT_OPACITY;
+    return Math.max(MIN_OPACITY, Math.min(MAX_OPACITY, Math.round(stored)));
+  }
+
+  function setStatus(message, kind) {
+    try {
+      if (typeof setMessage === 'function') {
+        setMessage('mapMessage', message, kind || '');
+        return;
+      }
+    } catch (_) {}
+    const node = getElement('mapMessage');
+    if (node) node.textContent = message;
+  }
+
+  function radarUrl() {
+    const bucket = Math.floor(Date.now() / REFRESH_MS);
+    return `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q/{z}/{x}/{y}.png?rtp=${bucket}`;
+  }
+
+  function ensureRadarPane(map) {
+    if (!map || typeof map.createPane !== 'function') return 'tilePane';
+    let pane = null;
+    try { pane = map.getPane('weatherRadarPane'); } catch (_) {}
+    if (!pane) {
+      pane = map.createPane('weatherRadarPane');
+      // Above base map tiles, below route/trail overlays and aircraft markers.
+      pane.style.zIndex = '300';
+      pane.style.pointerEvents = 'none';
+    }
+    return 'weatherRadarPane';
+  }
+
+  function createRadarLayer(map) {
+    if (typeof L === 'undefined' || !L.tileLayer) return null;
+    return L.tileLayer(radarUrl(), {
+      pane: ensureRadarPane(map),
+      opacity: currentOpacity() / 100,
+      maxZoom: 19,
+      crossOrigin: true,
+      attribution: 'Radar: Iowa State IEM / NEXRAD'
+    });
+  }
+
+  function updateControls(enabled) {
+    const opacity = currentOpacity();
+    const toggle = getElement('weatherRadarToggle');
+    const slider = getElement('weatherRadarOpacity');
+    const value = getElement('weatherRadarOpacityValue');
+    if (toggle) toggle.checked = Boolean(enabled);
+    if (slider) slider.value = String(opacity);
+    if (value) value.textContent = `${opacity}%`;
+  }
+
+  function refreshRadar() {
+    if (!radarLayer) return;
+    try { radarLayer.setUrl(radarUrl()); } catch (_) {}
+    try { radarLayer.redraw(); } catch (_) {}
+  }
+
+  function stopRefreshTimer() {
+    if (refreshTimer) {
+      window.clearInterval(refreshTimer);
+      refreshTimer = null;
+    }
+  }
+
+  function startRefreshTimer() {
+    stopRefreshTimer();
+    refreshTimer = window.setInterval(refreshRadar, REFRESH_MS);
+  }
+
+  function enableRadar(enabled, announce) {
+    const map = getMap();
+    if (!map || typeof L === 'undefined') return false;
+    const active = Boolean(enabled);
+    localStorage.setItem(ENABLED_KEY, active ? '1' : '0');
+
+    if (active) {
+      if (!radarLayer) radarLayer = createRadarLayer(map);
+      if (!radarLayer) return false;
+      try {
+        if (!map.hasLayer(radarLayer)) radarLayer.addTo(map);
+      } catch (_) {
+        try { radarLayer.addTo(map); } catch (_e) { return false; }
+      }
+      try { radarLayer.setOpacity(currentOpacity() / 100); } catch (_) {}
+      refreshRadar();
+      startRefreshTimer();
+      if (announce) setStatus('Weather radar overlay enabled.', 'good');
+    } else {
+      stopRefreshTimer();
+      try {
+        if (radarLayer && map.hasLayer(radarLayer)) map.removeLayer(radarLayer);
+      } catch (_) {}
+      if (announce) setStatus('Weather radar overlay disabled.', '');
+    }
+
+    updateControls(active);
+    return true;
+  }
+
+  function setOpacity(value) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return;
+    const opacity = Math.max(MIN_OPACITY, Math.min(MAX_OPACITY, Math.round(parsed)));
+    localStorage.setItem(OPACITY_KEY, String(opacity));
+    if (radarLayer) {
+      try { radarLayer.setOpacity(opacity / 100); } catch (_) {}
+    }
+    updateControls(localStorage.getItem(ENABLED_KEY) === '1');
+  }
+
+  function installControls() {
+    if (installedControls || getElement('weatherRadarControls')) return true;
+    const map = getMap();
+    const toolbar = document.querySelector('.map-toolbar');
+    if (!map || !toolbar) return false;
+
+    const controls = document.createElement('div');
+    controls.id = 'weatherRadarControls';
+    controls.className = 'map-weather-controls';
+    controls.innerHTML = [
+      '<label class="map-weather-toggle" title="Overlay current NEXRAD base reflectivity radar">',
+      '<input id="weatherRadarToggle" type="checkbox"> Radar',
+      '</label>',
+      '<label class="map-weather-opacity" title="Weather radar overlay opacity">',
+      '<span>Opacity</span>',
+      `<input id="weatherRadarOpacity" type="range" min="${MIN_OPACITY}" max="${MAX_OPACITY}" step="5" value="${currentOpacity()}">`,
+      `<span id="weatherRadarOpacityValue">${currentOpacity()}%</span>`,
+      '</label>',
+      '<button id="weatherRadarRefresh" type="button" title="Refresh radar tiles now">Refresh Radar</button>'
+    ].join('');
+
+    const message = getElement('mapMessage');
+    if (message && message.parentElement === toolbar) toolbar.insertBefore(controls, message);
+    else toolbar.appendChild(controls);
+
+    const toggle = getElement('weatherRadarToggle');
+    const slider = getElement('weatherRadarOpacity');
+    const refresh = getElement('weatherRadarRefresh');
+
+    if (toggle) toggle.addEventListener('change', () => enableRadar(toggle.checked, true));
+    if (slider) slider.addEventListener('input', () => setOpacity(slider.value));
+    if (refresh) refresh.addEventListener('click', () => {
+      refreshRadar();
+      setStatus('Weather radar overlay refreshed.', 'good');
+    });
+
+    installedControls = true;
+    updateControls(localStorage.getItem(ENABLED_KEY) === '1');
+    if (localStorage.getItem(ENABLED_KEY) === '1') enableRadar(true, false);
+    return true;
+  }
+
+  function boot() {
+    let attempts = 0;
+    const timer = window.setInterval(() => {
+      attempts += 1;
+      if (installControls() || attempts >= 80) window.clearInterval(timer);
+    }, 250);
+    installControls();
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+  else boot();
+})();
+
