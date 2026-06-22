@@ -86,6 +86,55 @@ FAST_NOAA_HIGH_HZ = 162_562_500
 FAST_NOAA_BIN_HZ = 12_500
 
 
+
+class SingleInstanceGuard:
+    """Prevent duplicate packaged backend instances from serving the same runtime."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.handle: Any = None
+
+    def acquire(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.handle = self.path.open("a+", encoding="utf-8", newline="\n")
+        try:
+            if os.name == "nt":
+                import msvcrt
+                self.handle.seek(0)
+                msvcrt.locking(self.handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            raise RuntimeError(
+                f"Another RTL ADS-B Tracker backend already owns runtime lock {self.path}"
+            ) from exc
+
+        self.handle.seek(0)
+        self.handle.truncate()
+        self.handle.write(json.dumps({
+            "pid": os.getpid(),
+            "started_utc": int(time.time()),
+            "lock": str(self.path),
+        }) + "\n")
+        self.handle.flush()
+
+    def release(self) -> None:
+        if self.handle is not None:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    self.handle.seek(0)
+                    msvcrt.locking(self.handle.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+            self.handle.close()
+            self.handle = None
+
+
 class PiPortSettingsStore(SettingsStore):
     """Persist Pi-facing application settings in the existing runtime settings file."""
 
@@ -2265,6 +2314,9 @@ def main() -> int:
         console_handler.setFormatter(formatter)
         logger.addHandler(console_handler)
     LOG.info("Diagnostic log file: %s; level=%s", log_path, level_name)
+    instance_guard = SingleInstanceGuard(runtime_root / "backend.lock")
+    instance_guard.acquire()
+
     settings_path = Path(args.settings_file) if args.settings_file else runtime_root / "settings" / "application_settings.json"
     settings = PiPortSettingsStore(settings_path)
     catalog_path = Path(args.airband_catalog_file) if args.airband_catalog_file else runtime_root / "settings" / "faa_airband_catalog.json"
@@ -2310,6 +2362,7 @@ def main() -> int:
         audio_ops.live_noaa_stop()
         manager.stop()
         server.server_close()
+        instance_guard.release()
     return 0
 
 

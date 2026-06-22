@@ -270,7 +270,11 @@ class DecoderManager:
                     str(adsb_index),
                     "--net",
                 ]
-                LOG.info("Starting Dump1090 for ADS-B serial %s at index %s", ADSB_SERIAL, adsb_index)
+                LOG.info(
+                    "Starting Dump1090 for ADS-B serial %s at resolved runtime index %s",
+                    ADSB_SERIAL,
+                    adsb_index,
+                )
                 self.process = subprocess.Popen(
                     command,
                     cwd=windows_path(self.dump1090.parent),
@@ -445,7 +449,7 @@ class AudioManager:
             live_log_path.unlink(missing_ok=True)
             command = [
                 windows_path(Path(rtl_fm)),
-                "-d", str(index),
+                "-d", AUDIO_SERIAL,
                 "-f", str(profile["frequency_hz"]),
                 "-M", str(profile["rtl_fm_mode"]),
                 "-s", str(profile["sample_rate_hz"]),
@@ -462,7 +466,13 @@ class AudioManager:
             self.live_profile = dict(profile)
             self.live_channel = dict(channel) if channel else None
             self.live_stop_event.clear()
-            LOG.info("Starting live %s listening at %s Hz for audio serial %s on cached index %s", profile["modulation"], profile["frequency_hz"], AUDIO_SERIAL, index)
+            LOG.info(
+                "Starting live %s listening at %s Hz for audio serial %s; current diagnostic index is %s",
+                profile["modulation"],
+                profile["frequency_hz"],
+                AUDIO_SERIAL,
+                index,
+            )
             self.live_process = subprocess.Popen(
                 command,
                 cwd=windows_path(self.runtime_dir),
@@ -574,7 +584,7 @@ class AudioManager:
                 path.unlink(missing_ok=True)
             command = [
                 windows_path(Path(rtl_fm)),
-                "-d", str(index),
+                "-d", AUDIO_SERIAL,
                 "-f", str(NOAA_PROFILE["frequency_hz"]),
                 "-M", "fm",
                 "-s", str(NOAA_PROFILE["sample_rate_hz"]),
@@ -585,7 +595,11 @@ class AudioManager:
                 windows_path(self.raw_path),
             ]
             self.log_handle = self.log_path.open("w", encoding="utf-8", newline="\n")
-            LOG.info("Starting NOAA recording for audio serial %s at cached index %s", AUDIO_SERIAL, index)
+            LOG.info(
+                "Starting NOAA recording for audio serial %s; current diagnostic index is %s",
+                AUDIO_SERIAL,
+                index,
+            )
             self.process = subprocess.Popen(
                 command,
                 cwd=windows_path(self.runtime_dir),
